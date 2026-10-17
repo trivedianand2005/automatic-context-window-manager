@@ -1,11 +1,20 @@
 # TinyFish integration
 
-**Status: implemented, mock-tested, not verified against the live service.**
+**Status: implemented and verified against the live TinyFish Search API on 2026-10-18.**
 
-No `TINYFISH_API_KEY` was available during development, so **no request to the real
-TinyFish API has been made from this repository**. The adapter follows the published
-documentation below and is covered by tests that use mocked HTTP responses
-(`tests/unit/test_integrations.py`).
+Verification consisted of real requests made with a real key:
+
+* **Locally, through `TinyFishSearchClient`:** the query `fastapi jwt oauth2`, restricted to
+  `fastapi.tiangolo.com`, returned 5 results, including *OAuth2 with Password (and
+  hashing), Bearer with JWT tokens*.
+* **Through the deployed API** (`POST /context/build` with `"include_research": true` on
+  `acwm-api.onrender.com`): 5 sourced findings were returned, and
+  `GET /health` reported `tinyfish_last_call: real: TinyFish Search API (last request
+  succeeded)`.
+
+Error handling, retries and malformed responses are covered by tests that use mocked HTTP
+responses (`tests/unit/test_integrations.py`). Those paths were not exercised live, except
+for one `401` that occurred while a deploy with an outdated key value was still live.
 
 ## Documentation consulted
 

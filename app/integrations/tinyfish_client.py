@@ -13,8 +13,8 @@ Retrieved snippets are external, untrusted text: they are length-limited, stripp
 control characters, shown with source URLs, and only included in a context package
 when the user opts in. They are never executed or treated as instructions.
 
-The live service has NOT been called from this repository (no credentials available
-during development); behaviour is covered by tests with mocked HTTP responses.
+Verified against the live Search API on 2026-10-18 (see docs/tinyfish_integration.md);
+error and retry paths are covered by tests with mocked HTTP responses.
 """
 
 from __future__ import annotations

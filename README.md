@@ -485,8 +485,9 @@ task.
 
 * Set `TINYFISH_API_KEY` (and optionally `ACWM_TINYFISH_ENABLED=true`) to enable it.
 * Without a key, a clearly labelled offline mock is used.
-* **The live service has not been called from this project** (no key was available). The
-  adapter is tested with mocked HTTP responses only.
+* **The integration was verified with real requests on 2026-10-18,** both locally and on the
+  deployed API, where it returned sourced FastAPI documentation results. Its failure paths
+  are covered by mocked tests.
 
 Details and the documentation check date are in
 [docs/tinyfish_integration.md](docs/tinyfish_integration.md).
@@ -547,8 +548,8 @@ The suite covers:
   marked, and the full file stays available in the index.
 * **In-memory indexes.** They are rebuilt after a restart; there is no incremental
   re-indexing.
-* **Unverified live integrations.** The Anthropic and TinyFish adapters have only been
-  tested against mocks.
+* **Unverified LLM integration.** The Anthropic adapter has only been tested against mocks.
+  TinyFish was verified live on 2026-10-18.
 * **No downstream guarantee.** A good context package does not guarantee a correct code
   change.
 
