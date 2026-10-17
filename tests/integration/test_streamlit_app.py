@@ -31,7 +31,8 @@ def test_main_workflow():
 
 def test_invalid_path_shows_error():
     at = AppTest.from_file(APP, default_timeout=60).run()
-    at.text_input[0].set_value("Z:/definitely/not/allowed").run()
+    # The filesystem root ("C:\\" or "/") is outside the allowed roots on every OS.
+    at.text_input[0].set_value(Path(APP).anchor).run()
     click(at, "Index / re-index repository")
     assert not at.exception
     assert any("allowed roots" in e.value for e in at.error)
