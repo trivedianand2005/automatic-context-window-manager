@@ -9,6 +9,11 @@ validated, exportable context package.
 It runs fully offline. LLM, TinyFish and semantic-search integrations are optional and
 clearly labelled when they are mocked or unavailable.
 
+**Live demo** (Render free tier, so the first load after idle takes about a minute):
+
+* Web UI: <https://acwm-ui.onrender.com>
+* API docs: <https://acwm-api.onrender.com/docs>
+
 ---
 
 ## Contents
