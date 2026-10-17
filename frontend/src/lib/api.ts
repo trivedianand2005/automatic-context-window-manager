@@ -118,7 +118,8 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
  */
 export async function waitForApi(
   onAttempt?: (attempt: number) => void,
-  { attempts = 30, delayMs = 4000 }: { attempts?: number; delayMs?: number } = {},
+  // ~4-5 minutes in total: a cold start on the free tier can take a couple of minutes.
+  { attempts = 50, delayMs = 5000 }: { attempts?: number; delayMs?: number } = {},
 ): Promise<Health> {
   let lastError: unknown;
   for (let i = 1; i <= attempts; i++) {

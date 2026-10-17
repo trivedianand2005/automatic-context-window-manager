@@ -86,9 +86,19 @@ export function Layout({ children }: { children: ReactNode }) {
             </div>
           )}
           {apiStatus === "offline" && (
-            <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-200">
-              <span>Could not reach the API at <code className="text-red-100">{API_URL}</code>.</span>
-              <button className="btn-ghost" onClick={() => void connect()}><RefreshCw className="size-4" /> Retry</button>
+            <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-200">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <span>Could not reach the API at <code className="text-red-100">{API_URL}</code>.</span>
+                <button className="btn-ghost" onClick={() => void connect()}><RefreshCw className="size-4" /> Retry</button>
+              </div>
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-red-200/80">
+                <li>
+                  Open <a className="underline" href={`${API_URL}/health`} target="_blank" rel="noreferrer noopener">{API_URL}/health</a> in a new tab.
+                  If it shows <code>{'{"status":"ok"...}'}</code> the server is up — come back and press Retry.
+                </li>
+                <li>If that page does not load either, the free server may still be starting (wait a minute) or your network blocks <code>onrender.com</code>; try mobile data.</li>
+                <li>If that page loads but this app still cannot connect, an ad blocker or privacy extension (e.g. Brave Shields, uBlock) is blocking the request — allow this site or try an incognito window.</li>
+              </ul>
             </div>
           )}
           {error && (
