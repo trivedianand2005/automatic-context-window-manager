@@ -31,3 +31,12 @@ demo_output/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/tsconfig.tsbuildinfo
+# Public, non-secret build setting (production API URL)
+!frontend/.env.production

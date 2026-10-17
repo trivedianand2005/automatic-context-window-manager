@@ -37,3 +37,40 @@ jobs:
         run: python -m pytest -p no:cacheprovider
       - name: Demo smoke run
         run: python scripts/run_demo.py --out demo_output
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install backend
+        working-directory: .
+        run: pip install -r requirements.txt
+      - name: Install frontend
+        run: npm ci
+      - name: Typecheck and unit tests
+        run: |
+          npx tsc -b
+          npx vitest run
+      - name: Build against the local API
+        run: VITE_API_URL=http://127.0.0.1:8000 npx vite build
+      - name: End-to-end tests (Playwright, real API)
+        run: |
+          npx playwright install --with-deps chromium
+          (cd .. && python -m uvicorn app.api.main:app --port 8000 &)
+          npx vite preview --port 4173 --strictPort &
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8000/health && curl -sf http://localhost:4173/ >/dev/null && break; sleep 1; done
+          npx playwright test
+      - name: Production build
+        run: npm run build

@@ -73,6 +73,17 @@ class Settings(BaseModel):
     # API limits
     api_max_request_bytes: int = Field(1_000_000, ge=1_000)
     api_timeout_seconds: float = Field(60.0, gt=0, le=600)
+    api_max_sessions: int = Field(200, ge=1, le=10_000)
+    cors_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:4173",
+            "http://127.0.0.1:4173",
+        ]
+    )
+    # Matches the Render static-site URL even if Render appends a suffix to the name.
+    cors_origin_regex: str | None = r"https://acwm-web(-[a-z0-9]+)?\.onrender\.com"
 
     @field_validator("allowed_roots", mode="before")
     @classmethod
@@ -118,6 +129,10 @@ def load_settings(env_file: Path | None = None) -> Settings:
     data["tinyfish_enabled"] = _env_bool("ACWM_TINYFISH_ENABLED", False)
     if domains := _split_list(os.getenv("ACWM_TINYFISH_INCLUDE_DOMAINS"), ","):
         data["tinyfish_include_domains"] = domains
+    if origins := _split_list(os.getenv("ACWM_CORS_ORIGINS"), ","):
+        data["cors_origins"] = origins
+    if (regex := os.getenv("ACWM_CORS_ORIGIN_REGEX")) is not None:
+        data["cors_origin_regex"] = regex or None
     return Settings(**data)
 
 

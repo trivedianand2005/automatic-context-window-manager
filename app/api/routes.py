@@ -7,28 +7,32 @@ import json
 from functools import partial
 
 from anyio import to_thread
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 
 from app import __version__
 from app.api.schemas import (
     BenchmarkRunRequest,
     BuildRequest,
     CompareRequest,
+    ConfigResponse,
     ErrorResponse,
     ExportRequest,
     ExportResponse,
+    FileInfo,
     HealthResponse,
     IndexRequest,
     IndexResponse,
     RepositoryResponse,
+    RunInfo,
+    SymbolInfo,
 )
 from app.context.context_exporter import EXTENSIONS, MIME_TYPES
 from app.context.package_models import ContextPackage
-from app.core.config import BENCHMARK_FILE
+from app.core.config import BENCHMARK_FILE, SAMPLE_REPO_PATH
 from app.core.exceptions import ACWMError
 from app.graph.dependency_graph import serialize_graph
 from app.services.acwm_service import ACWMService, BenchmarkReport, ComparisonResult
-from app.services.options import BuildOptions
+from app.services.options import MODE_LABELS, BuildOptions
 
 router = APIRouter()
 ERRORS = {
@@ -46,7 +50,16 @@ class ProcessingTimeout(ACWMError):
     http_status = 504
 
 
-def get_service(request: Request) -> ACWMService:
+SESSION_HEADER = "X-ACWM-Session"
+
+
+def get_service(
+    request: Request,
+    session_id: str | None = Header(None, alias=SESSION_HEADER, max_length=64),
+) -> ACWMService:
+    """Per-visitor service when the client sends ``X-ACWM-Session``, else the shared one."""
+    if session_id:
+        return request.app.state.sessions.get(session_id)
     return request.app.state.service
 
 
@@ -75,6 +88,27 @@ def health(service: ACWMService = Depends(get_service)) -> HealthResponse:
     return HealthResponse(version=__version__, providers=service.provider_statuses())
 
 
+@router.get("/config", response_model=ConfigResponse, tags=["system"])
+def get_config(service: ACWMService = Depends(get_service)) -> ConfigResponse:
+    s = service.settings
+    return ConfigResponse(
+        sample_repository_path=str(SAMPLE_REPO_PATH),
+        budget=s.budget.model_dump(),
+        weights=s.weights.model_dump(),
+        expansion_depth=s.expansion_depth,
+        modes=MODE_LABELS,
+        tokenizer_encoding=s.tokenizer_encoding,
+        providers=service.provider_statuses(),
+    )
+
+
+@router.get("/runs", response_model=list[RunInfo], tags=["system"])
+def recent_runs(
+    limit: int = Query(10, ge=1, le=50), service: ACWMService = Depends(get_service)
+) -> list[RunInfo]:
+    return [RunInfo(**r.model_dump()) for r in service.sessions.recent(limit)]
+
+
 @router.post(
     "/repositories/index", response_model=IndexResponse, responses=ERRORS, tags=["repositories"]
 )
@@ -93,15 +127,46 @@ def get_repository(
     repository_id: str,
     include_graph: bool = Query(False),
     include_symbols: bool = Query(False),
+    include_files: bool = Query(False),
     service: ACWMService = Depends(get_service),
 ) -> RepositoryResponse:
     repo = service.store.get(repository_id)
+    files = None
+    if include_files:
+        files = [
+            FileInfo(
+                path=f.path,
+                file_type=f.file_type,
+                language=f.language,
+                tokens=f.tokens,
+                line_count=f.line_count,
+                symbol_count=len(repo.modules[f.path].symbols) if f.path in repo.modules else 0,
+                parse_error=repo.modules[f.path].parse_error if f.path in repo.modules else None,
+            )
+            for f in repo.files.values()
+        ]
+    symbols = None
+    if include_symbols:
+        symbols = {
+            p: [
+                SymbolInfo(
+                    id=s.id,
+                    qualname=s.qualname,
+                    kind=s.kind,
+                    signature=s.signature,
+                    start_line=s.start_line,
+                    end_line=s.end_line,
+                    docstring=s.docstring,
+                )
+                for s in m.symbols
+            ]
+            for p, m in repo.modules.items()
+        }
     return RepositoryResponse(
         repository=service.repository_summary(repo),
         report=repo.report,
-        symbols={p: [s.qualname for s in m.symbols] for p, m in repo.modules.items()}
-        if include_symbols
-        else None,
+        files=files,
+        symbols=symbols,
         graph=serialize_graph(repo.graph) if include_graph else None,
     )
 

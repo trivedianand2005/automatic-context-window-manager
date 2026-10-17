@@ -8,14 +8,16 @@ from __future__ import annotations
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api.routes import router
+from app.api.routes import SESSION_HEADER, router
 from app.core.config import Settings, get_settings
 from app.core.exceptions import ACWMError
 from app.core.logging_config import configure_logging, get_logger
 from app.services.acwm_service import ACWMService
+from app.services.session_registry import SessionRegistry
 
 log = get_logger("api")
 
@@ -86,7 +88,17 @@ def create_app(settings: Settings | None = None, service: ACWMService | None = N
         ),
     )
     app.state.service = service or ACWMService(settings)
+    app.state.sessions = SessionRegistry(settings, settings.api_max_sessions)
     app.add_middleware(RequestSizeLimitMiddleware, max_bytes=settings.api_max_request_bytes)
+    # Added last so it is the outermost middleware (CORS headers on every response).
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_origin_regex=settings.cors_origin_regex,
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type", SESSION_HEADER],
+        max_age=600,
+    )
 
     @app.exception_handler(ACWMError)
     async def handle_acwm_error(request: Request, exc: ACWMError) -> JSONResponse:

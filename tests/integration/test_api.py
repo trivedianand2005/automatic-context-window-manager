@@ -157,3 +157,74 @@ def test_benchmarks(client):
     assert len(listing["tasks"]) == 5
     r = client.post("/benchmarks/run", json={"token_budget": 4000})
     assert r.status_code == 200 and set(r.json()["aggregate"]) == {"baseline", "dependency", "acwm"}
+
+
+SAMPLE_PATH = {"path": str(SAMPLE_REPO_PATH)}
+
+
+def test_config_and_runs(client):
+    cfg = client.get("/config").json()
+    assert cfg["sample_repository_path"].endswith("sample_fastapi_repo")
+    assert set(cfg["modes"]) == {"acwm", "dependency", "baseline"}
+    assert cfg["weights"]["lexical"] > 0 and cfg["budget"]["total_tokens"] > 0
+    headers = {"X-ACWM-Session": "runs-session-0001"}
+    rid = client.post("/repositories/index", json=SAMPLE_PATH, headers=headers).json()[
+        "repository"
+    ]["repository_id"]
+    client.post("/context/build", json={"repository_id": rid, "task": TASK}, headers=headers)
+    runs = client.get("/runs", headers=headers).json()
+    assert len(runs) == 1 and runs[0]["task"] == TASK
+    assert client.get("/runs", headers={"X-ACWM-Session": "other-session-01"}).json() == []
+
+
+def test_sessions_are_isolated(client):
+    a = {"X-ACWM-Session": "session-aaaa-0001"}
+    b = {"X-ACWM-Session": "session-bbbb-0002"}
+    rid = client.post("/repositories/index", json=SAMPLE_PATH, headers=a).json()["repository"][
+        "repository_id"
+    ]
+    assert client.get(f"/repositories/{rid}", headers=a).status_code == 200
+    r = client.post("/context/build", json={"repository_id": rid, "task": TASK}, headers=b)
+    assert r.status_code == 404  # session B never indexed it
+
+
+@pytest.mark.parametrize("bad", ["short", "has spaces in it", "x" * 65, "semi;colon-1234"])
+def test_invalid_session_header(client, bad):
+    r = client.get("/runs", headers={"X-ACWM-Session": bad})
+    assert r.status_code in (400, 422)
+    assert r.json()["error"]["code"] in ("invalid_session", "validation_error")
+
+
+def test_repository_file_and_symbol_details(client):
+    h = {"X-ACWM-Session": "detail-session-01"}
+    rid = client.post("/repositories/index", json=SAMPLE_PATH, headers=h).json()["repository"][
+        "repository_id"
+    ]
+    body = client.get(
+        f"/repositories/{rid}", params={"include_files": True, "include_symbols": True}, headers=h
+    ).json()
+    files = {f["path"]: f for f in body["files"]}
+    assert files["shopapi/services/auth_service.py"]["symbol_count"] >= 5
+    sym = next(
+        s
+        for s in body["symbols"]["shopapi/services/auth_service.py"]
+        if s["qualname"] == "AuthService.issue_token"
+    )
+    assert sym["kind"] == "method" and sym["start_line"] < sym["end_line"]
+
+
+def test_cors_preflight(client):
+    allowed = client.options(
+        "/context/build",
+        headers={
+            "Origin": "https://acwm-web.onrender.com",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-acwm-session",
+        },
+    )
+    assert allowed.status_code == 200
+    assert allowed.headers["access-control-allow-origin"] == "https://acwm-web.onrender.com"
+    local = client.get("/health", headers={"Origin": "http://localhost:5173"})
+    assert local.headers["access-control-allow-origin"] == "http://localhost:5173"
+    evil = client.get("/health", headers={"Origin": "https://evil.example.com"})
+    assert "access-control-allow-origin" not in evil.headers

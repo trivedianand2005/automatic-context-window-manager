@@ -11,8 +11,9 @@ clearly labelled when they are mocked or unavailable.
 
 **Live demo** (Render free tier, so the first load after idle takes about a minute):
 
-* Web UI: <https://acwm-ui.onrender.com>
+* Web app (React): <https://acwm-web.onrender.com>
 * API docs: <https://acwm-api.onrender.com/docs>
+* Original Streamlit UI (kept as a backup): <https://acwm-ui.onrender.com>
 
 ---
 
@@ -264,12 +265,26 @@ Copy `.env.example` to `.env`. Every variable is optional.
 
 ## Running the UI, API and demo
 
-```bash
-# Streamlit UI  ->  http://localhost:8501
-streamlit run app/streamlit_app.py
+The main web app is a React + TypeScript + Tailwind single-page app in `frontend/` that
+calls the FastAPI backend. It needs Node.js 20 or newer.
 
-# FastAPI  ->  http://127.0.0.1:8000/docs
+```bash
+# 1. FastAPI backend  ->  http://127.0.0.1:8000/docs
 uvicorn app.api.main:app --reload --port 8000
+
+# 2. React web app (second terminal)  ->  http://localhost:5173
+cd frontend
+npm ci
+npm run dev            # uses http://127.0.0.1:8000 by default (set VITE_API_URL to change it)
+
+# Frontend checks
+npm run typecheck && npm test                      # TypeScript + Vitest unit/component tests
+npx playwright install chromium                    # once
+VITE_API_URL=http://127.0.0.1:8000 npx vite build && npx vite preview --port 4173
+npx playwright test                                # end-to-end, in a third terminal
+
+# Streamlit UI (original interface, still supported)  ->  http://localhost:8501
+streamlit run app/streamlit_app.py
 
 # One-command demo (index -> analyse -> retrieve -> graph -> optimise -> package
 #                   -> compare -> export Markdown/JSON/TXT -> metrics and warnings)
@@ -582,10 +597,11 @@ sample application's tests and the demo on Python 3.11 and 3.12.
 
 ## Deploying to Render
 
-`render.yaml` is a Render Blueprint that creates two free web services from this repository:
+`render.yaml` is a Render Blueprint that creates three free services from this repository:
 
 | Service | Start command | Health check |
 |---|---|---|
+| `acwm-web` | static site: `cd frontend && npm ci && npm run build`, publishes `frontend/dist` | — |
 | `acwm-ui` | `streamlit run app/streamlit_app.py --server.port $PORT --server.address 0.0.0.0 ...` | `/_stcore/health` |
 | `acwm-api` | `uvicorn app.api.main:app --host 0.0.0.0 --port $PORT` | `/health` |
 

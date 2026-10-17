@@ -38,11 +38,55 @@ class IndexResponse(BaseModel):
     report: IndexingReport
 
 
+class FileInfo(BaseModel):
+    path: str
+    file_type: str
+    language: str
+    tokens: int
+    line_count: int
+    symbol_count: int = 0
+    parse_error: str | None = None
+
+
+class SymbolInfo(BaseModel):
+    id: str
+    qualname: str
+    kind: str
+    signature: str
+    start_line: int
+    end_line: int
+    docstring: str | None = None
+
+
 class RepositoryResponse(BaseModel):
     repository: RepositorySummary
     report: IndexingReport
-    symbols: dict[str, list[str]] | None = None
+    files: list[FileInfo] | None = None
+    symbols: dict[str, list[SymbolInfo]] | None = None
     graph: dict | None = None
+
+
+class ConfigResponse(BaseModel):
+    """Defaults the frontend uses to populate its forms."""
+
+    sample_repository_path: str
+    budget: dict
+    weights: dict[str, float]
+    expansion_depth: int
+    modes: dict[str, str]
+    tokenizer_encoding: str
+    providers: dict[str, str]
+
+
+class RunInfo(BaseModel):
+    timestamp: float
+    repository_id: str
+    task: str
+    mode: str
+    selected_files: int
+    rendered_tokens: int
+    usable_tokens: int
+    latency_ms: float
 
 
 class BuildRequest(BuildOptions):

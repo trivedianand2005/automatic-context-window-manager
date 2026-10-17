@@ -34,3 +34,16 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.6
+
+  # React frontend (static site, free). Calls the acwm-api service above.
+  - type: web
+    name: acwm-web
+    runtime: static
+    buildCommand: cd frontend && npm ci && npm run build
+    staticPublishPath: frontend/dist
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_VERSION
+        value: 22.19.0
+      - key: VITE_API_URL
+        value: https://acwm-api.onrender.com

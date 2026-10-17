@@ -33,6 +33,29 @@ Every error uses this shape:
 
 ## Endpoints
 
+## Sessions and CORS
+
+* **Sessions.** Clients may send an `X-ACWM-Session` header (8–64 letters, digits or `-`).
+  Each session id gets its own in-memory index store and run history, so visitors to the
+  public site never see each other's data. Requests without the header use one shared
+  service, which keeps `curl` and scripts working. The React frontend generates a random
+  id per browser and stores it in `localStorage`. An invalid id returns
+  `400 invalid_session`.
+* **CORS.** Allowed origins come from `ACWM_CORS_ORIGINS` (comma-separated; defaults to the
+  local Vite ports 5173 and 4173) plus `ACWM_CORS_ORIGIN_REGEX`. The regex defaults to the
+  Render site `https://acwm-web*.onrender.com`. Only `GET` and `POST` with `Content-Type`
+  and `X-ACWM-Session` headers are allowed.
+
+### `GET /config`
+
+Returns form defaults for clients: the sample repository path, budget settings, ranking
+weights, expansion depth, mode labels, tokenizer encoding and provider status.
+
+### `GET /runs?limit=10`
+
+Returns metadata for this session's recent context builds: task, mode, file count, tokens
+and latency. File contents are never included.
+
 ### `GET /health`
 
 Returns the status, version and provider status:
@@ -67,7 +90,10 @@ The `repository_id` is stable for the same absolute root path.
 Query parameters:
 
 * `include_graph=true` adds the file-level dependency graph in NetworkX node-link format.
-* `include_symbols=true` adds a map from path to symbol qualnames.
+* `include_files=true` adds every indexed file with its type, language, line count, token
+  count, symbol count and parse error.
+* `include_symbols=true` adds a map from path to symbols. Each symbol has `id`, `qualname`,
+  `kind`, `signature`, `start_line`, `end_line` and `docstring`.
 
 ### `POST /context/build`
 
