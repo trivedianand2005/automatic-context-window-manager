@@ -165,6 +165,8 @@ SAMPLE_PATH = {"path": str(SAMPLE_REPO_PATH)}
 def test_config_and_runs(client):
     cfg = client.get("/config").json()
     assert cfg["sample_repository_path"].endswith("sample_fastapi_repo")
+    names = {r["path"].replace("\\", "/").rsplit("/", 1)[-1] for r in cfg["example_repositories"]}
+    assert {"sample_fastapi_repo", "sample_library_repo"} <= names
     assert set(cfg["modes"]) == {"acwm", "dependency", "baseline"}
     assert cfg["weights"]["lexical"] > 0 and cfg["budget"]["total_tokens"] > 0
     headers = {"X-ACWM-Session": "runs-session-0001"}

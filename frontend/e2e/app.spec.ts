@@ -105,3 +105,23 @@ test("mobile layout renders navigation and demo", async ({ browser }) => {
   await shot(page, "09-mobile-results");
   await ctx.close();
 });
+
+test("second example repository (LibTrack) can be indexed and used", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText(/API online/)).toBeVisible();
+  await nav(page, "Repository");
+  await page.getByRole("button", { name: /LibTrack/ }).click();
+  await expect(page.getByText("libtrack/fines.py").first()).toBeVisible();
+  await nav(page, "Build context");
+  await page.getByRole("button", { name: "late-fee-bug" }).click();
+  await page.getByLabel("Coding task").fill(
+    "Fix the off-by-one bug in the fine calculation (overdue_days) and add regression tests.",
+  );
+  await page.getByLabel("Total token budget").fill("6000");
+  await page.getByRole("button", { name: "Build context" }).last().click();
+  await expect(page.getByRole("heading", { name: "Results" })).toBeVisible();
+  for (const f of ["libtrack/fines.py", "libtrack/loans.py", "tests/test_fines.py"]) {
+    await expect(page.getByText(f, { exact: true }).first()).toBeVisible();
+  }
+  await shot(page, "10-libtrack-results");
+});

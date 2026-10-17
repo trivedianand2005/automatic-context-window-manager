@@ -8,7 +8,7 @@ import { useStore } from "../lib/store";
 type Tab = "files" | "symbols" | "graph" | "excluded" | "warnings";
 
 export function RepositoryPage() {
-  const { indexPath, setIndexPath, indexRepo, repo, details, busy, apiStatus } = useStore();
+  const { indexPath, setIndexPath, indexRepo, repo, details, busy, apiStatus, config } = useStore();
   const [tab, setTab] = useState<Tab>("files");
   const [filter, setFilter] = useState("");
   const [symbolFile, setSymbolFile] = useState("");
@@ -36,7 +36,25 @@ export function RepositoryPage() {
             <FolderSearch className="size-4" /> {repo ? "Re-index" : "Index repository"}
           </button>
         </form>
-        <p className="mt-2 text-xs text-zinc-500">On the hosted demo only the bundled sample repository is inside the allowed roots; other paths are rejected by design.</p>
+        <p className="mt-2 text-xs text-zinc-500">On the hosted demo only the bundled example repositories are inside the allowed roots; other paths are rejected by design.</p>
+        {!!config?.example_repositories?.length && (
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {config.example_repositories.map((ex) => {
+              const active = repo?.report.root === ex.path;
+              return (
+                <button key={ex.path} disabled={!!busy || apiStatus !== "online"}
+                  onClick={() => { setIndexPath(ex.path); void indexRepo(ex.path); }}
+                  className={`rounded-lg border p-3 text-left transition-colors disabled:opacity-50 ${active ? "border-sky-500 bg-sky-500/10" : "border-zinc-800 hover:border-zinc-600"}`}>
+                  <div className="flex items-center gap-2 text-sm font-medium text-zinc-100">
+                    {ex.name} {active && <Badge tone="high">indexed</Badge>}
+                  </div>
+                  <div className="mt-1 text-xs text-zinc-400">{ex.description}</div>
+                  <div className="mt-1 font-mono text-[11px] text-zinc-600">{ex.path.split(/[\\/]/).slice(-2).join("/")}</div>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </Card>
 
       {!repo || !details ? (

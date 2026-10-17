@@ -34,6 +34,12 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.6
+      # Documentation research: uses the labelled offline mock until a key is added.
+      - key: ACWM_TINYFISH_ENABLED
+        value: "true"
+      # Secret: add the value in the Render dashboard (acwm-api -> Environment).
+      - key: TINYFISH_API_KEY
+        sync: false
 
   # React frontend (static site, free). Calls the acwm-api service above.
   - type: web

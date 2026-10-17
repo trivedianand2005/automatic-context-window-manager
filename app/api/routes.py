@@ -16,6 +16,7 @@ from app.api.schemas import (
     CompareRequest,
     ConfigResponse,
     ErrorResponse,
+    ExampleRepository,
     ExportRequest,
     ExportResponse,
     FileInfo,
@@ -28,7 +29,7 @@ from app.api.schemas import (
 )
 from app.context.context_exporter import EXTENSIONS, MIME_TYPES
 from app.context.package_models import ContextPackage
-from app.core.config import BENCHMARK_FILE, SAMPLE_REPO_PATH
+from app.core.config import BENCHMARK_FILE, PROJECT_ROOT, SAMPLE_REPO_PATH
 from app.core.exceptions import ACWMError
 from app.graph.dependency_graph import serialize_graph
 from app.services.acwm_service import ACWMService, BenchmarkReport, ComparisonResult
@@ -88,11 +89,26 @@ def health(service: ACWMService = Depends(get_service)) -> HealthResponse:
     return HealthResponse(version=__version__, providers=service.provider_statuses())
 
 
+def _example_repositories() -> list[ExampleRepository]:
+    """Bundled example repositories under ``examples/`` (always inside the allowed roots)."""
+    out = []
+    for d in sorted((PROJECT_ROOT / "examples").iterdir()):
+        readme = d / "README.md"
+        if not d.is_dir() or not readme.is_file():
+            continue
+        lines = [ln.strip() for ln in readme.read_text(encoding="utf-8").splitlines()]
+        title = next((ln.lstrip("# ") for ln in lines if ln.startswith("#")), d.name)
+        body = next((ln for ln in lines if ln and not ln.startswith("#")), "")
+        out.append(ExampleRepository(name=title, path=str(d), description=body))
+    return out
+
+
 @router.get("/config", response_model=ConfigResponse, tags=["system"])
 def get_config(service: ACWMService = Depends(get_service)) -> ConfigResponse:
     s = service.settings
     return ConfigResponse(
         sample_repository_path=str(SAMPLE_REPO_PATH),
+        example_repositories=_example_repositories(),
         budget=s.budget.model_dump(),
         weights=s.weights.model_dump(),
         expansion_depth=s.expansion_depth,

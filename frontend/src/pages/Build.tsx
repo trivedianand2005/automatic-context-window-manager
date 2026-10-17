@@ -14,6 +14,13 @@ const COMPRESSION: { value: Compression; label: string; hint: string }[] = [
   { value: "llm", label: "LLM summary", hint: "Uses a configured LLM; falls back to outlines" },
   { value: "none", label: "None", hint: "Whole files only" },
 ];
+const LIBRARY_TASKS = [
+  { id: "late-fee-bug", task: "Fix the off-by-one bug in the late fee calculation and add regression tests." },
+  { id: "renewal-limit", task: "Allow members to renew a loan at most twice." },
+  { id: "isbn-search", task: "Add search by ISBN to the catalog." },
+  { id: "overdue-emails", task: "Send overdue reminder emails to members." },
+];
+
 const WEIGHT_HELP: Record<keyof Weights, string> = {
   lexical: "BM25 keyword relevance",
   filename: "Task terms in the file path",
@@ -25,7 +32,8 @@ const WEIGHT_HELP: Record<keyof Weights, string> = {
 };
 
 export function BuildPage() {
-  const { task, setTask, buildContext, busy, apiStatus, config, benchmarkTasks, details } = useStore();
+  const { task, setTask, buildContext, busy, apiStatus, config, benchmarkTasks, details, repo } = useStore();
+  const exampleTasks = repo?.repository.root_name === "sample_library_repo" ? LIBRARY_TASKS : benchmarkTasks;
   const [budget, setBudget] = useState(4000);
   const [mode, setMode] = useState<Mode>("acwm");
   const [depth, setDepth] = useState(2);
@@ -60,7 +68,7 @@ export function BuildPage() {
             <textarea id="task" rows={4} className="input resize-y text-[15px]" value={task} onChange={(e) => setTask(e.target.value)} placeholder="e.g. Fix database retry behavior and add regression tests." />
             <div className="mt-3 flex flex-wrap gap-2">
               <span className="text-xs text-zinc-500">Examples:</span>
-              {benchmarkTasks.map((t) => (
+              {exampleTasks.map((t) => (
                 <button key={t.id} onClick={() => setTask(t.task)} className="rounded-full border border-zinc-700 px-2.5 py-0.5 text-xs text-zinc-300 hover:border-sky-500 hover:text-sky-300">
                   {t.id}
                 </button>
@@ -154,7 +162,9 @@ export function BuildPage() {
           <button className="btn-primary w-full py-3 text-base" disabled={!canBuild} onClick={() => void submit()}>
             <Wand2 className="size-5" /> {busy ? "Working…" : "Build context"}
           </button>
-          <p className="text-center text-xs text-zinc-500">The sample repository is indexed automatically if needed.</p>
+          <p className="text-center text-xs text-zinc-500">
+            {repo ? <>Using <b className="text-zinc-300">{repo.repository.root_name}</b>. Switch repositories on the Repository page.</> : "The ShopAPI sample repository is indexed automatically if needed."}
+          </p>
         </div>
       </div>
     </div>

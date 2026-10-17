@@ -2,13 +2,16 @@ import { CheckCircle2, Circle, Play } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { METHOD_COLOR, METHOD_LABEL, MethodChart } from "../components/MethodChart";
 import type { MetricRow } from "../components/MethodChart";
-import { Badge, Card, PageHeader } from "../components/ui";
+import { Badge, Card, Notice, PageHeader } from "../components/ui";
 import { fmtInt, fmtPct, fmtScore } from "../lib/format";
 import { useStore } from "../lib/store";
 
 export function ComparePage() {
-  const { benchmarkTasks, runComparison, comparison, busy, apiStatus, task: currentTask, details } = useStore();
-  const [presetId, setPresetId] = useState("jwt-auth");
+  const { benchmarkTasks, runComparison, comparison, busy, apiStatus, task: currentTask, details, repo } = useStore();
+  const labelsMismatch = !!repo && repo.repository.root_name !== "sample_fastapi_repo";
+  const [presetId, setPresetId] = useState(
+    repo && repo.repository.root_name !== "sample_fastapi_repo" ? "" : "jwt-auth",
+  );
   const preset = benchmarkTasks.find((t) => t.id === presetId);
   const [task, setTask] = useState("");
   const [budget, setBudget] = useState(4000);
@@ -43,6 +46,12 @@ export function ComparePage() {
   return (
     <div>
       <PageHeader title="Compare methods" subtitle="Run the BM25 baseline, BM25 + dependency expansion, and full ACWM on the same task with the same token budget." />
+      {labelsMismatch && (
+        <div className="mb-4"><Notice tone="warn">
+          The benchmark labels belong to the ShopAPI sample, but <b>{repo!.repository.root_name}</b> is indexed. Choose "Custom (no labels)" here,
+          or re-index the ShopAPI sample on the Repository page. Without labels the comparison still shows each method's files and tokens.
+        </Notice></div>
+      )}
       <Card className="mb-6">
         <div className="grid gap-4 md:grid-cols-4">
           <div>

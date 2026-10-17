@@ -14,8 +14,15 @@ export interface Weights {
   semantic: number;
 }
 
+export interface ExampleRepository {
+  name: string;
+  path: string;
+  description: string;
+}
+
 export interface ConfigResponse {
   sample_repository_path: string;
+  example_repositories: ExampleRepository[];
   budget: {
     total_tokens: number;
     reserved_system_tokens: number;

@@ -15,6 +15,10 @@ clearly labelled when they are mocked or unavailable.
 * API docs: <https://acwm-api.onrender.com/docs>
 * Original Streamlit UI (kept as a backup): <https://acwm-ui.onrender.com>
 
+To test it yourself, use the two bundled example repositories and the tasks in
+[docs/testing_guide.md](docs/testing_guide.md). LibTrack is a held-out repository that ACWM
+was not tuned on.
+
 ---
 
 ## Contents

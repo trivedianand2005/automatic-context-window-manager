@@ -66,10 +66,17 @@ class RepositoryResponse(BaseModel):
     graph: dict | None = None
 
 
+class ExampleRepository(BaseModel):
+    name: str
+    path: str
+    description: str
+
+
 class ConfigResponse(BaseModel):
     """Defaults the frontend uses to populate its forms."""
 
     sample_repository_path: str
+    example_repositories: list[ExampleRepository] = Field(default_factory=list)
     budget: dict
     weights: dict[str, float]
     expansion_depth: int
