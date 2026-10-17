@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "acwm"
+version = "0.1.0"
+description = "Automatic Context Window Manager: dependency-aware, token-budgeted repository context selection for AI coding agents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "streamlit>=1.46",
+    "pydantic>=2.6",
+    "networkx>=3.2",
+    "rank-bm25>=0.2.2",
+    "tiktoken>=0.7",
+    "python-dotenv>=1.0",
+    "pathspec>=0.12",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.5"]
+llm = ["anthropic>=1.0"]
+semantic = ["sentence-transformers>=2.7"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["examples", ".venv", "demo_output"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = ["B008", "E501"]  # line length is enforced by `ruff format`
+
+[tool.ruff.format]
+quote-style = "double"

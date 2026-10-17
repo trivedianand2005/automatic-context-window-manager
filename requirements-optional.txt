@@ -1,0 +1,8 @@
+# Optional integrations. ACWM works fully without these.
+
+# LLM-assisted task analysis and summarization (set ACWM_LLM_PROVIDER=anthropic
+# and ANTHROPIC_API_KEY).
+anthropic>=1.0
+
+# Semantic retrieval signal (downloads an embedding model on first use; large install).
+# sentence-transformers>=2.7

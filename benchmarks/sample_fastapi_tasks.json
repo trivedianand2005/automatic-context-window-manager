@@ -1,0 +1,74 @@
+{
+  "repository": "examples/sample_fastapi_repo",
+  "labeling_notes": "Manually reviewed labels: the minimal set of files a developer would need to read or edit to complete each task correctly. Labels were written from the sample repository's code before ranking weights were tuned. Paths are repository-relative.",
+  "tasks": [
+    {
+      "id": "jwt-auth",
+      "task": "Add JWT authentication to the FastAPI application and create tests for protected routes.",
+      "relevant": [
+        "shopapi/services/auth_service.py",
+        "shopapi/api/dependencies.py",
+        "shopapi/core/security.py",
+        "shopapi/core/config.py",
+        "shopapi/api/routes/auth.py",
+        "shopapi/api/routes/orders.py",
+        "shopapi/api/routes/users.py",
+        "shopapi/models/schemas.py",
+        "tests/conftest.py",
+        "tests/test_auth.py",
+        "tests/test_orders.py"
+      ],
+      "rationale": "Token issuing/verification lives in AuthService and security helpers; the secret and TTL live in config; get_current_user guards the protected order/user routes; TokenResponse is in schemas; fixtures and auth/order tests must change."
+    },
+    {
+      "id": "db-retry",
+      "task": "Fix database retry behavior and add regression tests.",
+      "relevant": [
+        "shopapi/db/database.py",
+        "shopapi/utils/retry.py",
+        "shopapi/core/config.py",
+        "shopapi/core/errors.py",
+        "tests/test_database.py",
+        "tests/test_retry.py"
+      ],
+      "rationale": "Database.connect delegates to retry_with_backoff (the bug), retry limits come from config, exhausted retries map to DatabaseUnavailableError; both test modules cover the behaviour."
+    },
+    {
+      "id": "protected-route-tests",
+      "task": "Add tests for protected routes.",
+      "relevant": [
+        "shopapi/api/routes/orders.py",
+        "shopapi/api/routes/users.py",
+        "shopapi/api/dependencies.py",
+        "shopapi/services/auth_service.py",
+        "tests/conftest.py",
+        "tests/test_orders.py"
+      ],
+      "rationale": "Protected routes depend on get_current_user, which resolves tokens via AuthService; conftest provides auth_headers; test_orders is the existing protected-route test module."
+    },
+    {
+      "id": "error-handling",
+      "task": "Improve API error handling so that all errors, including validation errors, return consistent JSON error responses.",
+      "relevant": [
+        "shopapi/core/errors.py",
+        "shopapi/main.py",
+        "tests/test_auth.py",
+        "tests/test_orders.py"
+      ],
+      "rationale": "Handlers are defined in core/errors.py and registered in main.create_app; existing tests assert on error bodies and status codes."
+    },
+    {
+      "id": "request-validation",
+      "task": "Add request validation for order quantity and product id in the orders API.",
+      "relevant": [
+        "shopapi/models/schemas.py",
+        "shopapi/api/routes/orders.py",
+        "shopapi/services/order_service.py",
+        "shopapi/db/repositories.py",
+        "tests/test_orders.py",
+        "tests/conftest.py"
+      ],
+      "rationale": "OrderCreate lacks validators; the orders route and OrderService/OrderRepository handle product lookups; test_orders and its fixtures need new cases."
+    }
+  ]
+}

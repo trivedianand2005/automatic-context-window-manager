@@ -1,0 +1,36 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# Deploys the Streamlit UI and the FastAPI backend as two free web services.
+# Both work without API keys; optional keys can be added in the Render dashboard.
+services:
+  - type: web
+    name: acwm-ui
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: >-
+      streamlit run app/streamlit_app.py
+      --server.port $PORT --server.address 0.0.0.0
+      --server.headless true --browser.gatherUsageStats false
+    healthCheckPath: /_stcore/health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.6
+      - key: ACWM_TINYFISH_ENABLED
+        value: "false"
+      - key: TINYFISH_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+  - type: web
+    name: acwm-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.6

@@ -1,0 +1,173 @@
+# ACWM REST API
+
+Start the server:
+
+```bash
+uvicorn app.api.main:app --reload --port 8000
+```
+
+Interactive OpenAPI docs are served at <http://127.0.0.1:8000/docs>, and the raw schema
+at `/openapi.json`.
+
+All request and response bodies are JSON validated by Pydantic. Relative repository
+paths are resolved against the server's working directory.
+
+## Errors
+
+Every error uses this shape:
+
+```json
+{"error": {"code": "path_not_allowed", "message": "Repository path is outside the allowed roots. ...", "details": {"allowed_roots": ["..."]}}}
+```
+
+| Status | `code` | Cause |
+|---|---|---|
+| 400 | `invalid_repository` | Path does not exist or is not a directory |
+| 403 | `path_not_allowed` | Path outside allowed roots, path traversal in `required_paths`, or null bytes |
+| 404 | `repository_not_found` | Unknown `repository_id` (index it first; indexes live in memory) |
+| 413 | `request_too_large` | Body exceeds `api_max_request_bytes` (default 1 MB) |
+| 422 | `validation_error` | Request validation failed (`details` lists the fields) |
+| 422 | `budget_exceeded` | Budget too small after reservations, or required files exceed it |
+| 504 | `processing_timeout` | Processing exceeded `api_timeout_seconds` (default 60 s) |
+| 500 | `internal_error` | Unexpected error (details are logged server-side, not returned) |
+
+## Endpoints
+
+### `GET /health`
+
+Returns the status, version and provider status:
+
+```json
+{"status": "ok", "version": "0.1.0",
+ "providers": {"llm": "unconfigured (no LLM provider configured)",
+               "semantic": "unavailable (sentence-transformers not installed)",
+               "tinyfish": "disabled", "tinyfish_last_call": "not used"}}
+```
+
+### `POST /repositories/index`
+
+```json
+{"path": "examples/sample_fastapi_repo"}
+```
+
+Returns `{"repository": RepositorySummary, "report": IndexingReport}`. The
+`IndexingReport` contains these fields:
+
+* `total_discovered`, `indexed`, `skipped`;
+* `excluded`: a list of `{path, reason}`;
+* `file_types`, `languages`;
+* `total_tokens`, `total_bytes`;
+* `parse_warnings`;
+* `limit_reached`, `tokenizer`, `duration_ms`.
+
+The `repository_id` is stable for the same absolute root path.
+
+### `GET /repositories/{repository_id}`
+
+Query parameters:
+
+* `include_graph=true` adds the file-level dependency graph in NetworkX node-link format.
+* `include_symbols=true` adds a map from path to symbol qualnames.
+
+### `POST /context/build`
+
+```json
+{
+  "repository_id": "a2e3af7df11aacc4",
+  "task": "Add JWT authentication to the FastAPI application and create tests for protected routes.",
+  "mode": "acwm",
+  "token_budget": 4000,
+  "reserved_response_tokens": 1500,
+  "expansion_depth": 2,
+  "compression": "extractive",
+  "weights": {"lexical": 0.35, "filename": 0.1, "symbol": 0.15, "dependency": 0.2,
+              "test": 0.1, "config": 0.05, "semantic": 0.0},
+  "use_semantic": false,
+  "use_llm_analysis": false,
+  "include_research": false,
+  "redundancy_penalty": true,
+  "required_paths": ["shopapi/core/config.py"]
+}
+```
+
+Only `repository_id` and `task` are required. The fields are:
+
+| Field | Values |
+|---|---|
+| `mode` | `acwm` (default), `dependency`, `baseline` |
+| `compression` | `extractive` (default), `llm`, `none` |
+| `token_budget` | 500 to 2,000,000 |
+| `required_paths` | Repository-relative paths; traversal is rejected with 403 |
+
+The response is a full `ContextPackage`:
+
+* `task`, `analysis`, `repository`, `configuration`;
+* `items[]`, each with:
+  * `path`, `kind`, `is_partial`, `line_ranges`, `symbols`;
+  * `tokens`, `full_file_tokens`, `combined_score`, `scores`;
+  * `reasons`, `selection_note`, `dependency_path`, `content`;
+* `dependencies`, `tests`, `config_files`, `excluded`;
+* `omissions`, `warnings`, `token_stats`;
+* `research_findings`, `latency_ms`, `disclaimer`.
+
+### `POST /context/compare`
+
+The body is the same as `/context/build`, plus two optional fields:
+
+* `relevant_paths`: ground-truth labels used to compute metrics;
+* `k`: the cutoff for precision and recall (default 5).
+
+It runs `baseline`, `dependency` and `acwm` modes with the same budget. For each method it
+returns:
+
+* `selected`, `kinds`;
+* `rendered_tokens`, `usable_tokens`, `utilization`, `budget_violation`, `latency_ms`;
+* `precision_at_k`, `recall_at_k`, `mrr`, `coverage`, `full_coverage`;
+* `missing_relevant`.
+
+Metrics are `null` (N/A) when no labels are supplied.
+
+### `POST /context/export`
+
+Provide either a package or a build request (exactly one):
+
+```json
+{"format": "markdown", "build": {"repository_id": "...", "task": "..."}}
+{"format": "json", "package": { ...ContextPackage... }}
+```
+
+`format` is one of `markdown`, `json`, `txt`. The response is
+`{"format", "filename", "mime_type", "content"}`. JSON content is validated against the
+`ContextPackage` schema before it is returned.
+
+### `GET /benchmarks`
+
+Lists the labelled benchmark tasks from `benchmarks/sample_fastapi_tasks.json`.
+
+### `POST /benchmarks/run`
+
+```json
+{"token_budget": 4000, "k": 5}
+```
+
+Indexes the sample repository and runs every task with all three methods. Returns
+per-task comparisons and aggregate means. All numbers are measured at request time.
+
+## Example session (curl)
+
+```bash
+curl -s -X POST localhost:8000/repositories/index -H "content-type: application/json" \
+     -d '{"path": "examples/sample_fastapi_repo"}' | python -m json.tool | head
+curl -s -X POST localhost:8000/context/export -H "content-type: application/json" \
+     -d '{"format":"txt","build":{"repository_id":"<id>","task":"Fix database retry behavior"}}'
+```
+
+## Limits and safety
+
+* Only paths under allowed roots can be indexed (`ACWM_ALLOWED_ROOTS`).
+* Repository code is parsed with `ast` and is never imported or executed.
+* There is no shell execution anywhere in the request path.
+* Request bodies are capped at 1 MB by default.
+* Long operations run in a worker thread with a timeout. On timeout the request returns
+  504, but the thread is not forcibly killed.
+* Indexes are held in process memory, so restarting the server requires re-indexing.

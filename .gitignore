@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# ACWM runtime output
+demo_output/
+.acwm/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
