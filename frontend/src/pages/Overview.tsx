@@ -97,8 +97,14 @@ export function OverviewPage() {
           <ul className="space-y-2 text-sm">
             {Object.entries(health?.providers ?? {}).map(([k, v]) => (
               <li key={k} className="flex gap-3">
-                <span className="w-32 shrink-0 text-zinc-400">{k}</span>
-                <span className="text-zinc-300">{v}</span>
+                <span className="w-40 shrink-0 text-zinc-400">
+                  {k === "tinyfish_last_call" ? "tinyfish last call (this session)" : k}
+                </span>
+                <span className="text-zinc-300">
+                  {k === "tinyfish_last_call" && v === "not used"
+                    ? "not used yet — tick “Documentation research” on Build context to run one"
+                    : v}
+                </span>
               </li>
             ))}
           </ul>

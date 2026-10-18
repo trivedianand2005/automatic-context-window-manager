@@ -165,6 +165,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setPkg(result);
         setExcludedFindings(new Set());
         setPage("results");
+        // Provider status (e.g. TinyFish's last call) can change after a build.
+        api.health().then(setHealth).catch(() => undefined);
         return result;
       } catch (e) {
         fail(e);
