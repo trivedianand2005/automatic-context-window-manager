@@ -43,7 +43,6 @@ was not tuned on.
 18. [Known limitations](#known-limitations)
 19. [Security notes](#security-notes)
 20. [Future improvements](#future-improvements)
-21. [Publishing to GitHub](#publishing-to-github)
 
 ---
 
@@ -582,23 +581,6 @@ The suite covers:
   repositories, with a held-out split.
 * Verified live TinyFish Fetch-API integration for pulling documentation sections.
 * Exact token counts via the target model provider's token-counting endpoint.
-
-## Publishing to GitHub
-
-No GitHub repository has been created for this project yet. To publish it:
-
-```bash
-git init
-git add .
-git commit -m "Initial commit: ACWM"
-git branch -M main
-git remote add origin https://github.com/<your-account>/acwm.git
-git push -u origin main
-```
-
-Check `git status` before committing so that no `.env` file is included (it is already in
-`.gitignore`). GitHub Actions (`.github/workflows/tests.yml`) then runs lint, tests, the
-sample application's tests and the demo on Python 3.11 and 3.12.
 
 ## Deploying to Render
 

@@ -9,6 +9,7 @@ description = "Automatic Context Window Manager: dependency-aware, token-budgete
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+authors = [{ name = "Anand Trivedi", email = "anandtrivedi2005@gmail.com" }]
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
