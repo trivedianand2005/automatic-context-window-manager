@@ -7,6 +7,7 @@ Settings come from (in increasing priority): defaults, environment variables
 from __future__ import annotations
 
 import os
+import secrets
 from functools import lru_cache
 from pathlib import Path
 
@@ -84,6 +85,27 @@ class Settings(BaseModel):
     )
     # Matches the Render static-site URL even if Render appends a suffix to the name.
     cors_origin_regex: str | None = r"https://acwm-web(-[a-z0-9]+)?\.onrender\.com"
+    # Accounts and saved packages
+    database_url: str = Field(
+        default_factory=lambda: f"sqlite:///{PROJECT_ROOT / '.acwm' / 'acwm.db'}"
+    )
+    # Signs login tokens. Without ACWM_JWT_SECRET a random per-process secret is used, so
+    # tokens stop working after a restart (fine locally, set it in production).
+    jwt_secret: str = Field(default_factory=lambda: secrets.token_urlsafe(48), repr=False)
+    jwt_secret_from_env: bool = False
+    jwt_ttl_minutes: int = Field(7 * 24 * 60, ge=5, le=60 * 24 * 90)
+    # When true, repository/context endpoints need a logged-in user (production).
+    require_auth: bool = False
+    github_client_id: str | None = None
+    github_client_secret: str | None = Field(None, repr=False)
+    # Where the browser is sent after GitHub login, and the public URL of this API.
+    frontend_url: str = "http://localhost:5173"
+    public_api_url: str = "http://127.0.0.1:8000"
+    max_saved_packages: int = Field(50, ge=1, le=10_000)
+
+    @property
+    def github_enabled(self) -> bool:
+        return bool(self.github_client_id and self.github_client_secret)
 
     @field_validator("allowed_roots", mode="before")
     @classmethod
@@ -133,6 +155,18 @@ def load_settings(env_file: Path | None = None) -> Settings:
         data["cors_origins"] = origins
     if (regex := os.getenv("ACWM_CORS_ORIGIN_REGEX")) is not None:
         data["cors_origin_regex"] = regex or None
+    if db := os.getenv("DATABASE_URL"):
+        data["database_url"] = db
+    if secret := os.getenv("ACWM_JWT_SECRET"):
+        data["jwt_secret"] = secret
+        data["jwt_secret_from_env"] = True
+    data["require_auth"] = _env_bool("ACWM_REQUIRE_AUTH", False)
+    data["github_client_id"] = os.getenv("GITHUB_CLIENT_ID") or None
+    data["github_client_secret"] = os.getenv("GITHUB_CLIENT_SECRET") or None
+    if url := os.getenv("ACWM_FRONTEND_URL"):
+        data["frontend_url"] = url.rstrip("/")
+    if url := os.getenv("ACWM_PUBLIC_API_URL"):
+        data["public_api_url"] = url.rstrip("/")
     return Settings(**data)
 
 

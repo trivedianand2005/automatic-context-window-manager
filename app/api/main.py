@@ -12,12 +12,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.api.routes import SESSION_HEADER, router
+from app.api.auth_routes import router as auth_router
+from app.api.deps import SESSION_HEADER
+from app.api.routes import router
 from app.core.config import Settings, get_settings
 from app.core.exceptions import ACWMError
 from app.core.logging_config import configure_logging, get_logger
+from app.services.accounts import AccountService
 from app.services.acwm_service import ACWMService
 from app.services.session_registry import SessionRegistry
+from app.storage.database import Database
 
 log = get_logger("api")
 
@@ -89,14 +93,17 @@ def create_app(settings: Settings | None = None, service: ACWMService | None = N
     )
     app.state.service = service or ACWMService(settings)
     app.state.sessions = SessionRegistry(settings, settings.api_max_sessions)
+    app.state.accounts = AccountService(settings, Database(settings.database_url))
+    if settings.require_auth and not settings.jwt_secret_from_env:
+        log.warning("ACWM_JWT_SECRET is not set: login tokens will stop working after a restart.")
     app.add_middleware(RequestSizeLimitMiddleware, max_bytes=settings.api_max_request_bytes)
     # Added last so it is the outermost middleware (CORS headers on every response).
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_origin_regex=settings.cors_origin_regex,
-        allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type", SESSION_HEADER],
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["Content-Type", "Authorization", SESSION_HEADER],
         max_age=600,
     )
 
@@ -118,6 +125,7 @@ def create_app(settings: Settings | None = None, service: ACWMService | None = N
         return _error(500, "internal_error", "An unexpected error occurred.")
 
     app.include_router(router)
+    app.include_router(auth_router)
     return app
 
 

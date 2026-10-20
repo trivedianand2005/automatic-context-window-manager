@@ -148,6 +148,18 @@ keep the dependency chain and drop the distractors within a fixed budget.
 * An optional TinyFish Search API adapter with an offline mock, and an optional Anthropic
   LLM provider.
 
+### Accounts and saved packages
+
+* **Sign up / log in** with email and password, or **Continue with GitHub** (OAuth with
+  `state` and PKCE). Every visitor must log in before using the hosted web app.
+* **Private workspace per account.** Indexed repositories and run history are isolated per
+  user on the server.
+* **Saved context packages.** Press *Save to my account* on the Results page. Saved
+  packages live in PostgreSQL and can be opened, downloaded or deleted later from the
+  **Saved packages** page. Other users can never see them.
+* Passwords are stored only as salted scrypt hashes. Login returns a signed JWT that expires
+  after 7 days.
+
 ## Architecture
 
 ```mermaid
@@ -265,6 +277,11 @@ Copy `.env.example` to `.env`. Every variable is optional.
 | `ACWM_TINYFISH_ENABLED` | `false` | Default for the research toggle |
 | `TINYFISH_API_KEY` | (empty) | Real TinyFish Search API; when empty, the mock is used |
 | `ACWM_TINYFISH_INCLUDE_DOMAINS` | FastAPI, Pydantic and Python docs | Domains to search |
+| `DATABASE_URL` | local SQLite file `.acwm/acwm.db` | PostgreSQL URL for accounts and saved packages (Render sets it automatically) |
+| `ACWM_JWT_SECRET` | random per process | Signs login tokens. Set it in production, or logins break after every restart |
+| `ACWM_REQUIRE_AUTH` | `false` | `true` = repository and context endpoints need a logged-in user (on in production) |
+| `ACWM_FRONTEND_URL` / `ACWM_PUBLIC_API_URL` | localhost URLs | Used by the GitHub login redirect |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | (empty) | Optional "Login with GitHub" (see below) |
 
 ## Running the UI, API and demo
 
@@ -503,6 +520,12 @@ Details and the documentation check date are in
 | POST | `/context/export` | Markdown, JSON or TXT from a package or a build request |
 | GET | `/benchmarks` | List labelled benchmark tasks |
 | POST | `/benchmarks/run` | Run the benchmark and return measured metrics |
+| GET | `/auth/providers` | Which login methods are enabled |
+| POST | `/auth/signup`, `/auth/login` | Create an account or log in; returns a bearer token |
+| GET | `/auth/me` | The logged-in user |
+| GET | `/auth/github/login`, `/auth/github/callback` | GitHub OAuth login |
+| GET, POST | `/packages` | List or save this user's context packages |
+| GET, DELETE | `/packages/{id}` | Open or delete one saved package |
 
 Request and response formats are in [docs/api.md](docs/api.md), and the interactive docs
 are at `/docs`.
@@ -547,6 +570,14 @@ The suite covers:
   marked, and the full file stays available in the index.
 * **In-memory indexes.** They are rebuilt after a restart; there is no incremental
   re-indexing.
+* **Accounts are basic.** There is no email verification, password reset or account
+  deletion yet. Tokens cannot be revoked before they expire (7 days). Rate limits are kept
+  in memory per server process.
+* **Free database expiry.** Render's free PostgreSQL expires 30 days after creation, then
+  is deleted after a 14-day grace period. Upgrade it or point `DATABASE_URL` elsewhere to
+  keep accounts.
+* **Streamlit backup UI has no login.** It runs the engine in-process and never touches
+  accounts or saved packages.
 * **Unverified LLM integration.** The Anthropic adapter has only been tested against mocks.
   TinyFish was verified live on 2026-10-18.
 * **No downstream guarantee.** A good context package does not guarantee a correct code
@@ -569,6 +600,11 @@ The suite covers:
   stack traces. There is no shell execution.
 * External content (TinyFish and LLM output) is labelled as untrusted, length-limited, and
   never executed. Prompts instruct the model to ignore instructions embedded in files.
+* Accounts: passwords use salted scrypt; logins are rate-limited; JWTs are signed with a
+  server secret; GitHub login checks `state`, uses PKCE and links accounts by GitHub id
+  only (never by email); saved packages are always looked up together with their owner. The
+  web app keeps the token in `localStorage`, so a cross-site-scripting bug could expose it;
+  the app renders no user-supplied HTML.
 * **This is a local developer tool, not a hardened multi-tenant service.** Do not expose
   the API publicly.
 
@@ -607,6 +643,18 @@ On the deployed site:
   `TINYFISH_API_KEY` in the Render dashboard.
 * Free Render instances sleep after inactivity, so the first request after a pause can take
   about a minute.
+
+### Enabling "Login with GitHub" (optional)
+
+1. Open GitHub → **Settings → Developer settings → OAuth Apps → New OAuth App**.
+2. Set **Homepage URL** to `https://acwm-web.onrender.com`, and **Authorization callback URL**
+   to `https://acwm-api.onrender.com/auth/github/callback`.
+3. Create the app, then generate a **client secret**.
+4. In Render, open **acwm-api → Environment** and set `GITHUB_CLIENT_ID` and
+   `GITHUB_CLIENT_SECRET`, then redeploy.
+
+Until this is done, the GitHub button is shown as "not configured" and email login works
+normally.
 
 ## License
 

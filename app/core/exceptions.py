@@ -45,3 +45,37 @@ class ProviderError(ACWMError):
 
     code = "provider_error"
     http_status = 502
+
+
+class AuthenticationError(ACWMError):
+    """Missing, invalid or expired credentials."""
+
+    code = "not_authenticated"
+    http_status = 401
+
+
+class AccountExistsError(ACWMError):
+    code = "account_exists"
+    http_status = 409
+
+
+class RateLimitedError(ACWMError):
+    code = "rate_limited"
+    http_status = 429
+
+
+class NotFoundError(ACWMError):
+    code = "not_found"
+    http_status = 404
+
+
+class QuotaExceededError(ACWMError):
+    code = "quota_exceeded"
+    http_status = 409
+
+
+class NotConfiguredError(ACWMError):
+    """An optional feature is not configured on this server."""
+
+    code = "not_configured"
+    http_status = 501

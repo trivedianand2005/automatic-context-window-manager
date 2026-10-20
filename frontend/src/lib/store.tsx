@@ -1,7 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { api, ApiError, waitForApi } from "./api";
+import { api, ApiError, consumeAuthFragment, getToken, onUnauthorized, setToken, waitForApi } from "./api";
 import type {
+  AuthProviders,
   BenchmarkReport,
   BenchmarkTask,
   BuildRequest,
@@ -11,9 +12,12 @@ import type {
   Health,
   IndexResponse,
   RepositoryDetails,
+  SavedPackageSummary,
+  User,
 } from "./types";
 
-export type Page = "overview" | "repository" | "build" | "results" | "compare" | "benchmarks" | "export";
+export type Page =
+  | "overview" | "repository" | "build" | "results" | "compare" | "benchmarks" | "export" | "saved";
 export type ApiStatus = "connecting" | "online" | "offline";
 
 export const EXAMPLE_TASK =
@@ -46,9 +50,25 @@ interface Store {
   benchmark: BenchmarkReport | null;
   runBenchmarks: (budget: number) => Promise<void>;
 
+  user: User | null;
+  authProviders: AuthProviders | null;
+  authChecked: boolean;
+  login: (email: string, password: string) => Promise<boolean>;
+  signup: (email: string, password: string, displayName?: string) => Promise<boolean>;
+  logout: (message?: string) => void;
+  startGithubLogin: () => void;
+
+  saved: SavedPackageSummary[];
+  refreshSaved: () => Promise<void>;
+  saveCurrentPackage: (title?: string) => Promise<boolean>;
+  openSaved: (id: number) => Promise<void>;
+  deleteSaved: (id: number) => Promise<void>;
+
   busy: string | null;
   error: string | null;
   clearError: () => void;
+  notice: string | null;
+  clearNotice: () => void;
 }
 
 const StoreContext = createContext<Store | null>(null);
@@ -78,6 +98,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [authProviders, setAuthProviders] = useState<AuthProviders | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [saved, setSaved] = useState<SavedPackageSummary[]>([]);
   const repoRef = useRef<IndexResponse | null>(null);
   const pathRef = useRef("");
   repoRef.current = repo;
@@ -91,11 +116,26 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     try {
       const h = await waitForApi(setWakeAttempt);
       setHealth(h);
-      const [cfg, bench] = await Promise.all([api.config(), api.benchmarks()]);
+      const [cfg, bench, providers] = await Promise.all([
+        api.config(), api.benchmarks(), api.authProviders(),
+      ]);
       setConfig(cfg);
       setBenchmarkTasks(bench.tasks);
+      setAuthProviders(providers);
       setIndexPath((p) => p || cfg.sample_repository_path);
       setApiStatus("online");
+      // Restore the session (or finish a GitHub login that redirected back with #auth_token).
+      const fragment = consumeAuthFragment();
+      if (fragment.token) setToken(fragment.token);
+      if (fragment.error) setError(fragment.error);
+      if (getToken()) {
+        try {
+          setUser(await api.me());
+        } catch {
+          setToken(null);
+        }
+      }
+      setAuthChecked(true);
     } catch (e) {
       setApiStatus("offline");
       fail(e);
@@ -105,6 +145,144 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void connect();
   }, [connect]);
+
+  /** Forget everything that belonged to the previous user. */
+  const resetWorkspace = useCallback(() => {
+    setRepo(null);
+    repoRef.current = null;
+    setDetails(null);
+    setPkg(null);
+    setComparison(null);
+    setBenchmark(null);
+    setSaved([]);
+    setExcludedFindings(new Set());
+    setTask(EXAMPLE_TASK);
+    setPage("overview");
+  }, []);
+
+  const logout = useCallback(
+    (message?: string) => {
+      setToken(null);
+      setUser(null);
+      resetWorkspace();
+      setNotice(null);
+      if (message) setError(message);
+    },
+    [resetWorkspace],
+  );
+
+  useEffect(() => {
+    onUnauthorized(() => logout("Your session has ended. Please log in again."));
+    return () => onUnauthorized(null);
+  }, [logout]);
+
+  const finishAuth = useCallback(
+    (token: string, u: User) => {
+      resetWorkspace();
+      setToken(token);
+      setUser(u);
+      setError(null);
+    },
+    [resetWorkspace],
+  );
+
+  const login = useCallback(
+    async (email: string, password: string) => {
+      setBusy("Logging in...");
+      setError(null);
+      try {
+        const res = await api.login(email, password);
+        finishAuth(res.token, res.user);
+        return true;
+      } catch (e) {
+        fail(e);
+        return false;
+      } finally {
+        setBusy(null);
+      }
+    },
+    [finishAuth],
+  );
+
+  const signup = useCallback(
+    async (email: string, password: string, displayName?: string) => {
+      setBusy("Creating your account...");
+      setError(null);
+      try {
+        const res = await api.signup(email, password, displayName);
+        finishAuth(res.token, res.user);
+        return true;
+      } catch (e) {
+        fail(e);
+        return false;
+      } finally {
+        setBusy(null);
+      }
+    },
+    [finishAuth],
+  );
+
+  const startGithubLogin = useCallback(() => {
+    globalThis.location.assign(api.githubLoginUrl());
+  }, []);
+
+  const refreshSaved = useCallback(async () => {
+    try {
+      setSaved(await api.listPackages());
+    } catch (e) {
+      fail(e);
+    }
+  }, []);
+
+  const saveCurrentPackage = useCallback(
+    async (title?: string) => {
+      if (!pkg) return false;
+      setBusy("Saving package...");
+      setError(null);
+      try {
+        const kept = {
+          ...pkg,
+          research_findings: pkg.research_findings.filter((_, i) => !excludedFindings.has(i)),
+        };
+        const row = await api.savePackage(kept, title);
+        setSaved((prev) => [row, ...prev]);
+        setNotice(`Saved "${row.title}" to your account.`);
+        return true;
+      } catch (e) {
+        fail(e);
+        return false;
+      } finally {
+        setBusy(null);
+      }
+    },
+    [pkg, excludedFindings],
+  );
+
+  const openSaved = useCallback(async (id: number) => {
+    setBusy("Opening saved package...");
+    setError(null);
+    try {
+      const row = await api.getPackage(id);
+      setPkg(row.package);
+      setTask(row.package.task);
+      setExcludedFindings(new Set());
+      setPage("results");
+    } catch (e) {
+      fail(e);
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  const deleteSaved = useCallback(async (id: number) => {
+    setError(null);
+    try {
+      await api.deletePackage(id);
+      setSaved((prev) => prev.filter((p) => p.id !== id));
+    } catch (e) {
+      fail(e);
+    }
+  }, []);
 
   const doIndex = useCallback(async (path: string) => {
     const res = await api.index(path);
@@ -214,11 +392,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       page, setPage, apiStatus, wakeAttempt, health, config, benchmarkTasks, connect,
       indexPath, setIndexPath, repo, details, indexRepo,
       task, setTask, pkg, buildContext, comparison, runComparison, benchmark, runBenchmarks,
-      excludedFindings, toggleFinding, busy, error, clearError: () => setError(null),
+      excludedFindings, toggleFinding,
+      user, authProviders, authChecked, login, signup, logout, startGithubLogin,
+      saved, refreshSaved, saveCurrentPackage, openSaved, deleteSaved,
+      busy, error, clearError: () => setError(null), notice, clearNotice: () => setNotice(null),
     }),
     [page, apiStatus, wakeAttempt, health, config, benchmarkTasks, connect, indexPath, repo,
      details, indexRepo, task, pkg, buildContext, comparison, runComparison, benchmark,
-     runBenchmarks, excludedFindings, toggleFinding, busy, error],
+     runBenchmarks, excludedFindings, toggleFinding, user, authProviders, authChecked, login,
+     signup, logout, startGithubLogin, saved, refreshSaved, saveCurrentPackage, openSaved,
+     deleteSaved, busy, error, notice],
   );
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }

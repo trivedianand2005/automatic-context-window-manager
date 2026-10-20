@@ -286,3 +286,40 @@ export interface BuildRequest {
   redundancy_penalty?: boolean;
   required_paths?: string[];
 }
+
+// ------------------------------------------------------------------ accounts
+export interface User {
+  id: number;
+  display_name: string;
+  email: string | null;
+  github_login: string | null;
+  created_at: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  token_type: "bearer";
+  expires_in_minutes: number;
+  user: User;
+}
+
+export interface AuthProviders {
+  email_password: boolean;
+  github: boolean;
+  require_auth: boolean;
+  database: string;
+}
+
+export interface SavedPackageSummary {
+  id: number;
+  title: string;
+  task: string;
+  repository_name: string;
+  item_count: number;
+  rendered_tokens: number;
+  created_at: string;
+}
+
+export interface SavedPackageFull extends SavedPackageSummary {
+  package: ContextPackage;
+}

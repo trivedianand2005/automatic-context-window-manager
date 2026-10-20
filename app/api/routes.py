@@ -7,9 +7,10 @@ import json
 from functools import partial
 
 from anyio import to_thread
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Depends, Query
 
 from app import __version__
+from app.api.deps import SESSION_HEADER, get_public_service, get_service  # noqa: F401
 from app.api.schemas import (
     BenchmarkRunRequest,
     BuildRequest,
@@ -38,6 +39,7 @@ from app.services.options import MODE_LABELS, BuildOptions
 router = APIRouter()
 ERRORS = {
     400: {"model": ErrorResponse},
+    401: {"model": ErrorResponse},
     403: {"model": ErrorResponse},
     404: {"model": ErrorResponse},
     413: {"model": ErrorResponse},
@@ -49,19 +51,6 @@ ERRORS = {
 class ProcessingTimeout(ACWMError):
     code = "processing_timeout"
     http_status = 504
-
-
-SESSION_HEADER = "X-ACWM-Session"
-
-
-def get_service(
-    request: Request,
-    session_id: str | None = Header(None, alias=SESSION_HEADER, max_length=64),
-) -> ACWMService:
-    """Per-visitor service when the client sends ``X-ACWM-Session``, else the shared one."""
-    if session_id:
-        return request.app.state.sessions.get(session_id)
-    return request.app.state.service
 
 
 async def run_blocking(service: ACWMService, func, *args, **kwargs):
@@ -85,7 +74,7 @@ def _options(req: BuildRequest) -> BuildOptions:
 
 
 @router.get("/health", response_model=HealthResponse, tags=["system"])
-def health(service: ACWMService = Depends(get_service)) -> HealthResponse:
+def health(service: ACWMService = Depends(get_public_service)) -> HealthResponse:
     return HealthResponse(version=__version__, providers=service.provider_statuses())
 
 
@@ -104,7 +93,7 @@ def _example_repositories() -> list[ExampleRepository]:
 
 
 @router.get("/config", response_model=ConfigResponse, tags=["system"])
-def get_config(service: ACWMService = Depends(get_service)) -> ConfigResponse:
+def get_config(service: ACWMService = Depends(get_public_service)) -> ConfigResponse:
     s = service.settings
     return ConfigResponse(
         sample_repository_path=str(SAMPLE_REPO_PATH),
@@ -218,7 +207,7 @@ async def export_context(body: ExportRequest, service: ACWMService = Depends(get
 
 
 @router.get("/benchmarks", tags=["benchmarks"])
-def list_benchmarks(service: ACWMService = Depends(get_service)) -> dict:
+def list_benchmarks(service: ACWMService = Depends(get_public_service)) -> dict:
     data = json.loads(BENCHMARK_FILE.read_text(encoding="utf-8"))
     return {
         "repository": data["repository"],

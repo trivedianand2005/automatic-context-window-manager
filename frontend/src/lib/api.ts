@@ -4,12 +4,17 @@ import type {
   BuildRequest,
   ComparisonResult,
   ConfigResponse,
+  AuthProviders,
+  AuthResponse,
   ContextPackage,
   ExportFormat,
   Health,
   IndexResponse,
   RepositoryDetails,
   RunInfo,
+  SavedPackageFull,
+  SavedPackageSummary,
+  User,
 } from "./types";
 
 export const API_URL: string = (
@@ -76,8 +81,49 @@ export async function toApiError(response: Response): Promise<ApiError> {
   );
 }
 
+// ------------------------------------------------------------------ login token
+const TOKEN_KEY = "acwm-auth-token";
+
+export function getToken(): string | null {
+  try {
+    return globalThis.localStorage?.getItem(TOKEN_KEY) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function setToken(token: string | null): void {
+  try {
+    if (token) globalThis.localStorage?.setItem(TOKEN_KEY, token);
+    else globalThis.localStorage?.removeItem(TOKEN_KEY);
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+let unauthorizedHandler: (() => void) | null = null;
+
+/** Called when the server rejects our login token (expired, revoked, server secret changed). */
+export function onUnauthorized(handler: (() => void) | null): void {
+  unauthorizedHandler = handler;
+}
+
+/**
+ * After GitHub login the API redirects to `/#auth_token=...` (or `#auth_error=...`).
+ * Read it once, then remove it from the address bar so it is not bookmarked or shared.
+ */
+export function consumeAuthFragment(): { token?: string; error?: string } {
+  const hash = globalThis.location?.hash ?? "";
+  if (!hash.startsWith("#auth_")) return {};
+  const params = new URLSearchParams(hash.slice(1));
+  globalThis.history?.replaceState(null, "", globalThis.location.pathname + globalThis.location.search);
+  const token = params.get("auth_token") ?? undefined;
+  const error = params.get("auth_error") ?? undefined;
+  return { token, error };
+}
+
 interface RequestOptions {
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "DELETE";
   body?: unknown;
   timeoutMs?: number;
 }
@@ -91,6 +137,7 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
       method: opts.method ?? "GET",
       headers: {
         [SESSION_HEADER]: getSessionId(),
+        ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
         ...(opts.body !== undefined ? { "Content-Type": "application/json" } : {}),
       },
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
@@ -108,7 +155,15 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   } finally {
     clearTimeout(timer);
   }
-  if (!response.ok) throw await toApiError(response);
+  if (!response.ok) {
+    const err = await toApiError(response);
+    if (response.status === 401 && err.code === "not_authenticated" && getToken()) {
+      setToken(null);
+      unauthorizedHandler?.();
+    }
+    throw err;
+  }
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
@@ -135,6 +190,18 @@ export async function waitForApi(
 }
 
 export const api = {
+  authProviders: () => request<AuthProviders>("/auth/providers"),
+  signup: (email: string, password: string, display_name?: string) =>
+    request<AuthResponse>("/auth/signup", { method: "POST", body: { email, password, display_name } }),
+  login: (email: string, password: string) =>
+    request<AuthResponse>("/auth/login", { method: "POST", body: { email, password } }),
+  me: () => request<User>("/auth/me"),
+  githubLoginUrl: () => `${API_URL}/auth/github/login`,
+  listPackages: () => request<SavedPackageSummary[]>("/packages"),
+  savePackage: (pkg: ContextPackage, title?: string) =>
+    request<SavedPackageSummary>("/packages", { method: "POST", body: { title, package: pkg } }),
+  getPackage: (id: number) => request<SavedPackageFull>(`/packages/${id}`),
+  deletePackage: (id: number) => request<void>(`/packages/${id}`, { method: "DELETE" }),
   health: () => request<Health>("/health", { timeoutMs: 15_000 }),
   config: () => request<ConfigResponse>("/config"),
   runs: () => request<RunInfo[]>("/runs?limit=10"),

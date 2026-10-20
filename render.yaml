@@ -1,6 +1,16 @@
 # Render Blueprint: https://render.com/docs/blueprint-spec
-# Deploys the Streamlit UI and the FastAPI backend as two free web services.
-# Both work without API keys; optional keys can be added in the Render dashboard.
+# Deploys the React site, the FastAPI backend, the Streamlit backup UI and a Postgres
+# database (user accounts + saved context packages).
+#
+# NOTE: Render's free Postgres expires 30 days after creation (14-day grace period, then
+# deleted). To keep data longer, upgrade the plan or point DATABASE_URL at another
+# Postgres provider; no code changes are needed.
+databases:
+  - name: acwm-db
+    plan: free
+    databaseName: acwm
+    user: acwm
+
 services:
   - type: web
     name: acwm-ui
@@ -39,6 +49,24 @@ services:
         value: "true"
       # Secret: add the value in the Render dashboard (acwm-api -> Environment).
       - key: TINYFISH_API_KEY
+        sync: false
+      # Accounts: every visitor must log in; data lives in the acwm-db Postgres database.
+      - key: ACWM_REQUIRE_AUTH
+        value: "true"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: acwm-db
+          property: connectionString
+      - key: ACWM_JWT_SECRET
+        generateValue: true
+      - key: ACWM_FRONTEND_URL
+        value: https://acwm-web.onrender.com
+      - key: ACWM_PUBLIC_API_URL
+        value: https://acwm-api.onrender.com
+      # Optional "Login with GitHub": values from your GitHub OAuth app.
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
         sync: false
 
   # React frontend (static site, free). Calls the acwm-api service above.

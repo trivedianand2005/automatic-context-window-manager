@@ -7,6 +7,20 @@ async function shot(page: Page, name: string) {
   if (SHOTS) await page.screenshot({ path: `${SHOTS}/${name}.png`, fullPage: true });
 }
 
+let counter = 0;
+/** Create a fresh account (unique email) and land in the workspace. */
+async function signUp(page: Page, name = "E2E User"): Promise<string> {
+  const email = `e2e-${Date.now()}-${counter++}@example.com`;
+  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+  await page.getByRole("tab", { name: "Sign up" }).click();
+  await page.getByLabel("Name (optional)").fill(name);
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill("correct-horse-battery");
+  await page.getByRole("button", { name: "Create account" }).click();
+  await expect(page.getByRole("button", { name: "Log out" })).toBeVisible();
+  return email;
+}
+
 async function nav(page: Page, label: string) {
   await page.getByRole("navigation", { name: "Main" }).getByRole("button", { name: label }).click();
 }
@@ -17,6 +31,7 @@ test("full workflow: demo -> results -> compare -> export -> repository -> bench
 
   await page.goto("/");
   await expect(page.getByText(/API online/)).toBeVisible();
+  await signUp(page);
   await shot(page, "01-overview");
 
   // One-click demo indexes the sample repo and builds the JWT task at 4,000 tokens.
@@ -89,6 +104,7 @@ test("full workflow: demo -> results -> compare -> export -> repository -> bench
 test("rejects paths outside the allowed roots with a friendly error", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText(/API online/)).toBeVisible();
+  await signUp(page);
   await nav(page, "Repository");
   await page.getByLabel("Repository directory").fill("/etc");
   await page.getByRole("button", { name: /Index repository|Re-index/ }).click();
@@ -100,6 +116,7 @@ test("mobile layout renders navigation and demo", async ({ browser }) => {
   const page = await ctx.newPage();
   await page.goto("/");
   await expect(page.getByText(/API online/)).toBeVisible();
+  await signUp(page);
   await page.getByRole("button", { name: "Run the demo" }).click();
   await expect(page.getByRole("heading", { name: "Results" })).toBeVisible();
   await shot(page, "09-mobile-results");
@@ -109,6 +126,7 @@ test("mobile layout renders navigation and demo", async ({ browser }) => {
 test("second example repository (LibTrack) can be indexed and used", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText(/API online/)).toBeVisible();
+  await signUp(page);
   await nav(page, "Repository");
   await page.getByRole("button", { name: /LibTrack/ }).click();
   await expect(page.getByText("libtrack/fines.py").first()).toBeVisible();
@@ -124,4 +142,53 @@ test("second example repository (LibTrack) can be indexed and used", async ({ pa
     await expect(page.getByText(f, { exact: true }).first()).toBeVisible();
   }
   await shot(page, "10-libtrack-results");
+});
+
+
+test("accounts: each user has a private workspace and saved packages", async ({ browser }) => {
+  // User A builds and saves a package.
+  const ctxA = await browser.newContext();
+  const a = await ctxA.newPage();
+  await a.goto("/");
+  await expect(a.getByText(/API online/)).toBeVisible();
+  const emailA = await signUp(a, "Alice");
+  await a.getByRole("button", { name: "Run the demo" }).click();
+  await expect(a.getByRole("heading", { name: "Results" })).toBeVisible();
+  await a.getByRole("button", { name: /Save to my account/ }).click();
+  await a.getByLabel("Package name").fill("Alice JWT context");
+  await a.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(a.getByRole("status")).toContainText("Alice JWT context");
+
+  // User B (another browser) cannot see it.
+  const ctxB = await browser.newContext();
+  const b = await ctxB.newPage();
+  await b.goto("/");
+  await expect(b.getByText(/API online/)).toBeVisible();
+  await signUp(b, "Bob");
+  await nav(b, "Saved packages");
+  await expect(b.getByText("No saved packages yet")).toBeVisible();
+  await expect(b.getByText("Alice JWT context")).toHaveCount(0);
+
+  // A logs out and back in: the saved package is still there (stored in the database).
+  await a.getByRole("button", { name: "Log out" }).click();
+  await expect(a.getByRole("heading", { name: "Welcome back" })).toBeVisible();
+  await a.getByLabel("Email").fill(emailA);
+  await a.getByLabel("Password").fill("correct-horse-battery");
+  await a.getByRole("button", { name: "Log in" }).click();
+  await nav(a, "Saved packages");
+  await expect(a.getByText("Alice JWT context")).toBeVisible();
+  await a.getByRole("button", { name: "Open" }).first().click();
+  await expect(a.getByRole("heading", { name: "Results" })).toBeVisible();
+  await expect(a.getByText("shopapi/api/dependencies.py").first()).toBeVisible();
+  await shot(a, "11-saved-package-opened");
+
+  // Wrong password is rejected with a clear message.
+  await a.getByRole("button", { name: "Log out" }).click();
+  await a.getByLabel("Email").fill(emailA);
+  await a.getByLabel("Password").fill("not-my-password");
+  await a.getByRole("button", { name: "Log in" }).click();
+  await expect(a.getByRole("alert")).toContainText("Incorrect email or password");
+  await shot(a, "12-login-error");
+  await ctxA.close();
+  await ctxB.close();
 });

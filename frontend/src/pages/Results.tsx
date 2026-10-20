@@ -1,4 +1,4 @@
-import { ChevronRight, ExternalLink, GitCompare } from "lucide-react";
+import { Bookmark, ChevronRight, ExternalLink, GitCompare } from "lucide-react";
 import { useMemo, useState } from "react";
 import { BudgetMeter } from "../components/BudgetMeter";
 import { CodeView } from "../components/CodeView";
@@ -73,7 +73,9 @@ function ItemCard({ item, open, onToggle }: { item: ContextItem; open: boolean; 
 type Tab = "selected" | "graph" | "excluded" | "notes";
 
 export function ResultsPage() {
-  const { pkg, details, setPage, excludedFindings, toggleFinding } = useStore();
+  const { pkg, details, setPage, excludedFindings, toggleFinding, saveCurrentPackage, busy } = useStore();
+  const [saving, setSaving] = useState(false);
+  const [title, setTitle] = useState("");
   const [open, setOpen] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("selected");
   const selected = useMemo(() => new Set(pkg?.items.map((i) => i.path) ?? []), [pkg]);
@@ -96,7 +98,20 @@ export function ResultsPage() {
         subtitle={<>Task: <span className="text-zinc-200">{pkg.task}</span></>}
         actions={<>
           <button className="btn-ghost" onClick={() => setPage("compare")}><GitCompare className="size-4" /> Compare with baseline</button>
-          <button className="btn-primary" onClick={() => setPage("export")}>Export package</button>
+          <button className="btn-ghost" onClick={() => setPage("export")}>Export package</button>
+          {saving ? (
+            <form className="flex gap-2" onSubmit={async (e) => {
+              e.preventDefault();
+              if (await saveCurrentPackage(title)) { setSaving(false); setTitle(""); }
+            }}>
+              <input autoFocus className="input w-56 py-1.5" placeholder="Name (optional)" maxLength={200}
+                aria-label="Package name" value={title} onChange={(e) => setTitle(e.target.value)} />
+              <button type="submit" className="btn-primary" disabled={!!busy}>Save</button>
+              <button type="button" className="btn-ghost" onClick={() => setSaving(false)}>Cancel</button>
+            </form>
+          ) : (
+            <button className="btn-primary" onClick={() => setSaving(true)}><Bookmark className="size-4" /> Save to my account</button>
+          )}
         </>}
       />
       <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-5">

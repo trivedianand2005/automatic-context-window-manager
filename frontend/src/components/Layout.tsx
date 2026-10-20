@@ -1,5 +1,6 @@
 import {
-  BarChart3, Download, FolderTree, GitCompare, LayoutDashboard, ListChecks, RefreshCw, Wand2, X,
+  BarChart3, Bookmark, CheckCircle2, Download, FolderTree, GitCompare, LayoutDashboard, ListChecks,
+  LogOut, RefreshCw, UserCircle2, Wand2, X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { API_URL } from "../lib/api";
@@ -15,6 +16,7 @@ const NAV: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: "compare", label: "Compare", icon: GitCompare },
   { page: "benchmarks", label: "Benchmarks", icon: BarChart3 },
   { page: "export", label: "Export", icon: Download },
+  { page: "saved", label: "Saved packages", icon: Bookmark },
 ];
 
 function StatusPill() {
@@ -33,8 +35,59 @@ function StatusPill() {
   );
 }
 
+function ConnectionBanners() {
+  const { apiStatus, wakeAttempt, connect } = useStore();
+  return (
+    <>
+      {apiStatus === "connecting" && (
+        <div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-200">
+          <Spinner label={wakeAttempt > 1 ? `Waking up the server (attempt ${wakeAttempt})… free hosting sleeps when idle, this can take up to a minute.` : "Connecting to the ACWM API…"} />
+        </div>
+      )}
+      {apiStatus === "offline" && (
+        <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-200">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>Could not reach the API at <code className="text-red-100">{API_URL}</code>.</span>
+            <button className="btn-ghost" onClick={() => void connect()}><RefreshCw className="size-4" /> Retry</button>
+          </div>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-red-200/80">
+            <li>
+              Open <a className="underline" href={`${API_URL}/health`} target="_blank" rel="noreferrer noopener">{API_URL}/health</a> in a new tab.
+              If it shows <code>{'{"status":"ok"...}'}</code> the server is up — come back and press Retry.
+            </li>
+            <li>If that page does not load either, the free server may still be starting (wait a minute) or your network blocks <code>onrender.com</code>; try mobile data.</li>
+            <li>If that page loads but this app still cannot connect, an ad blocker or privacy extension (e.g. Brave Shields, uBlock) is blocking the request — allow this site or try an incognito window.</li>
+          </ul>
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Minimal frame for the login screen (no navigation until the user has an account). */
+export function AuthLayout({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex min-h-screen flex-col">
+      <header className="flex items-center justify-between gap-3 border-b border-zinc-800 px-5 py-3 md:px-8">
+        <div className="flex items-center gap-3">
+          <img src="/favicon.svg" alt="" className="size-8" />
+          <div>
+            <div className="text-sm font-semibold text-zinc-50">ACWM</div>
+            <div className="text-[11px] text-zinc-500">Context Window Manager</div>
+          </div>
+        </div>
+        <StatusPill />
+      </header>
+      <main className="mx-auto w-full max-w-7xl flex-1 px-5 py-6 md:px-8">
+        <ConnectionBanners />
+        {children}
+      </main>
+    </div>
+  );
+}
+
 export function Layout({ children }: { children: ReactNode }) {
-  const { page, setPage, apiStatus, wakeAttempt, connect, busy, error, clearError, repo, pkg } = useStore();
+  const { page, setPage, busy, error, clearError, notice, clearNotice, repo, pkg, user, logout } = useStore();
   return (
     <div className="flex min-h-screen flex-col md:flex-row">
       <aside className="border-b border-zinc-800 bg-zinc-950 md:sticky md:top-0 md:h-screen md:w-60 md:shrink-0 md:border-r md:border-b-0">
@@ -76,29 +129,25 @@ export function Layout({ children }: { children: ReactNode }) {
           <div className="flex items-center gap-3">
             {busy && <Spinner label={busy} />}
             <StatusPill />
+            {user && (
+              <div className="flex items-center gap-2 border-l border-zinc-800 pl-3">
+                <span className="hidden items-center gap-1.5 text-xs text-zinc-300 sm:inline-flex" title={user.email ?? `GitHub: ${user.github_login}`}>
+                  <UserCircle2 className="size-4 text-zinc-400" /> {user.display_name}
+                </span>
+                <button className="btn-ghost px-2.5 py-1 text-xs" onClick={() => logout()} aria-label="Log out">
+                  <LogOut className="size-3.5" /> Log out
+                </button>
+              </div>
+            )}
           </div>
         </header>
 
         <main className="mx-auto w-full max-w-7xl flex-1 px-5 py-6 md:px-8 md:py-8">
-          {apiStatus === "connecting" && (
-            <div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-200">
-              <Spinner label={wakeAttempt > 1 ? `Waking up the server (attempt ${wakeAttempt})… free hosting sleeps when idle, this can take up to a minute.` : "Connecting to the ACWM API…"} />
-            </div>
-          )}
-          {apiStatus === "offline" && (
-            <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/5 px-4 py-3 text-sm text-red-200">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <span>Could not reach the API at <code className="text-red-100">{API_URL}</code>.</span>
-                <button className="btn-ghost" onClick={() => void connect()}><RefreshCw className="size-4" /> Retry</button>
-              </div>
-              <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-red-200/80">
-                <li>
-                  Open <a className="underline" href={`${API_URL}/health`} target="_blank" rel="noreferrer noopener">{API_URL}/health</a> in a new tab.
-                  If it shows <code>{'{"status":"ok"...}'}</code> the server is up — come back and press Retry.
-                </li>
-                <li>If that page does not load either, the free server may still be starting (wait a minute) or your network blocks <code>onrender.com</code>; try mobile data.</li>
-                <li>If that page loads but this app still cannot connect, an ad blocker or privacy extension (e.g. Brave Shields, uBlock) is blocking the request — allow this site or try an incognito window.</li>
-              </ul>
+          <ConnectionBanners />
+          {notice && (
+            <div role="status" className="mb-6 flex items-start justify-between gap-3 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-200">
+              <span className="flex items-center gap-2"><CheckCircle2 className="size-4" /> {notice}</span>
+              <button onClick={clearNotice} aria-label="Dismiss message" className="text-emerald-300 hover:text-emerald-100"><X className="size-4" /></button>
             </div>
           )}
           {error && (

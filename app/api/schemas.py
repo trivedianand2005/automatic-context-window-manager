@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -127,3 +128,56 @@ class ExportResponse(BaseModel):
 class BenchmarkRunRequest(BaseModel):
     token_budget: int = Field(4000, ge=1000, le=200_000)
     k: int = Field(5, ge=1, le=20)
+
+
+# ------------------------------------------------------------------- accounts
+class SignupRequest(BaseModel):
+    email: str = Field(..., min_length=3, max_length=320)
+    password: str = Field(..., min_length=1, max_length=128)
+    display_name: str | None = Field(None, max_length=100)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(..., min_length=1, max_length=320)
+    password: str = Field(..., min_length=1, max_length=128)
+
+
+class UserOut(BaseModel):
+    id: int
+    display_name: str
+    email: str | None = None
+    github_login: str | None = None
+    created_at: datetime
+
+
+class AuthResponse(BaseModel):
+    token: str
+    token_type: Literal["bearer"] = "bearer"
+    expires_in_minutes: int
+    user: UserOut
+
+
+class AuthProviders(BaseModel):
+    email_password: bool = True
+    github: bool
+    require_auth: bool
+    database: str
+
+
+class SavePackageRequest(BaseModel):
+    title: str | None = Field(None, max_length=200)
+    package: ContextPackage
+
+
+class SavedPackageSummary(BaseModel):
+    id: int
+    title: str
+    task: str
+    repository_name: str
+    item_count: int
+    rendered_tokens: int
+    created_at: datetime
+
+
+class SavedPackageOut(SavedPackageSummary):
+    package: ContextPackage

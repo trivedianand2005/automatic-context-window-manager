@@ -33,6 +33,36 @@ Every error uses this shape:
 
 ## Endpoints
 
+## Accounts and authentication
+
+* **Log in.** `POST /auth/signup` with `{"email", "password", "display_name"?}` or
+  `POST /auth/login` with `{"email", "password"}` returns
+  `{"token", "token_type": "bearer", "expires_in_minutes", "user"}`.
+* **Use the token.** Send `Authorization: Bearer <token>` on later requests. In `/docs`, use
+  the **Authorize** button.
+* **Login required in production.** With `ACWM_REQUIRE_AUTH=true` (set on Render), every
+  repository, context, compare, export, runs and benchmark-run endpoint returns
+  `401 not_authenticated` without a valid token. `/health`, `/config`, `/benchmarks` and
+  `/auth/*` stay public.
+* **Isolation.** A logged-in user's requests always use that user's own workspace (indexes
+  and runs), whatever `X-ACWM-Session` says.
+* **GitHub.** `GET /auth/github/login` redirects to GitHub (scope `read:user`, `state`, PKCE
+  S256) and sets a short-lived HttpOnly cookie. GitHub calls back to
+  `GET /auth/github/callback`, which redirects to `ACWM_FRONTEND_URL` with
+  `#auth_token=<jwt>` or `#auth_error=<message>` in the URL fragment. The web app reads the
+  fragment and removes it from the address bar.
+
+| Endpoint | Auth | Result |
+|---|---|---|
+| `GET /auth/providers` | — | `{email_password, github, require_auth, database}` |
+| `POST /auth/signup` | — | 201 token; 409 `account_exists`; 422 `invalid_input` (email format, password 8–128 chars) |
+| `POST /auth/login` | — | 200 token; 401 `not_authenticated`; 429 `rate_limited` after 10 failures in 5 minutes |
+| `GET /auth/me` | Bearer | The current user |
+| `GET /packages` | Bearer | This user's saved packages (newest first, summaries only) |
+| `POST /packages` | Bearer | `{"title"?, "package": ContextPackage}` → 201 summary; 409 `quota_exceeded` above 50 |
+| `GET /packages/{id}` | Bearer | Summary + full package; 404 if it does not exist or belongs to someone else |
+| `DELETE /packages/{id}` | Bearer | 204; same 404 rule |
+
 ## Sessions and CORS
 
 * **Sessions.** Clients may send an `X-ACWM-Session` header (8–64 letters, digits or `-`).
