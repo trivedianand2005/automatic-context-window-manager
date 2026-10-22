@@ -1,6 +1,6 @@
 import {
   BarChart3, Bookmark, CheckCircle2, Download, FolderTree, GitCompare, LayoutDashboard, ListChecks,
-  LogOut, RefreshCw, UserCircle2, Wand2, X,
+  LogOut, MessagesSquare, RefreshCw, UserCircle2, Wand2, X,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { API_URL } from "../lib/api";
@@ -15,6 +15,7 @@ const NAV: { page: Page; label: string; icon: typeof LayoutDashboard }[] = [
   { page: "results", label: "Results", icon: ListChecks },
   { page: "compare", label: "Compare", icon: GitCompare },
   { page: "benchmarks", label: "Benchmarks", icon: BarChart3 },
+  { page: "conversation", label: "Conversation", icon: MessagesSquare },
   { page: "export", label: "Export", icon: Download },
   { page: "saved", label: "Saved packages", icon: Bookmark },
 ];

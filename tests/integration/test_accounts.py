@@ -150,11 +150,12 @@ def test_bad_tokens_rejected(client):
 # --------------------------------------------------------------- require_auth
 def test_require_auth_protects_working_endpoints(tmp_path):
     c = make_client(tmp_path, require_auth=True)
-    for path in ("/health", "/config", "/benchmarks", "/auth/providers"):
+    for path in ("/health", "/config", "/benchmarks", "/auth/providers", "/conversation/status"):
         assert c.get(path).status_code == 200, path
     r = c.post("/repositories/index", json={"path": str(SAMPLE_REPO_PATH)})
     assert r.status_code == 401 and r.json()["error"]["code"] == "not_authenticated"
     assert c.get("/runs").status_code == 401
+    assert c.post("/conversation/benchmark", json={}).status_code == 401
     headers, _ = signup(c)
     assert (
         c.post(

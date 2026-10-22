@@ -323,3 +323,82 @@ export interface SavedPackageSummary {
 export interface SavedPackageFull extends SavedPackageSummary {
   package: ContextPackage;
 }
+
+// ------------------------------------------------------------ conversation manager
+export type ConversationStrategy = "full" | "truncation" | "acwm";
+
+export interface ConversationModelStatus {
+  backend: string;
+  model: string;
+  real_model: boolean;
+  status: string;
+}
+
+export interface ConversationStatus {
+  manager: ConversationModelStatus;
+  main_model: ConversationModelStatus;
+  live_runs_enabled: boolean;
+  live_available: boolean;
+  default_budget_tokens: number;
+  context: Record<string, number>;
+}
+
+export interface ConversationSummary {
+  strategy: ConversationStrategy;
+  turns_completed: number;
+  overflow_turn: number | null;
+  main_input_tokens: number;
+  main_output_tokens: number;
+  manager_input_tokens: number;
+  manager_output_tokens: number;
+  total_tokens: number;
+  main_cost_usd: number;
+  manager_cost_usd: number;
+  total_cost_usd: number;
+  manager_calls: number;
+  manager_latency_ms: number;
+  compactions: number;
+  manager_failures: number;
+  recall_correct: number;
+  recall_total: number;
+  recall_accuracy: number;
+}
+
+export interface ConversationTurn {
+  turn: number;
+  context_tokens: number;
+  usage_ratio: number;
+  main_model: string;
+  main_input_tokens: number;
+  main_output_tokens: number;
+  main_cost_usd: number;
+  manager_calls: number;
+  manager_input_tokens: number;
+  manager_output_tokens: number;
+  manager_latency_ms: number;
+  manager_cost_usd: number;
+  compaction: "llm" | "heuristic" | null;
+}
+
+export interface ConversationAnswer {
+  question_id: string;
+  turn: number;
+  fact_turn: number;
+  question: string;
+  expected_keywords: string[];
+  answer: string;
+  correct: boolean;
+}
+
+export interface ConversationResults {
+  mode: string;
+  budget_tokens: number;
+  main_model: string;
+  manager_model: string;
+  judge: string;
+  turns: number;
+  recall_questions: number;
+  summary: ConversationSummary[];
+  per_turn: Record<ConversationStrategy, ConversationTurn[]>;
+  answers: Record<ConversationStrategy, ConversationAnswer[]>;
+}

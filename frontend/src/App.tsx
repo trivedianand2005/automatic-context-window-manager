@@ -4,6 +4,7 @@ import { useStore } from "./lib/store";
 import { BenchmarksPage } from "./pages/Benchmarks";
 import { BuildPage } from "./pages/Build";
 import { ComparePage } from "./pages/Compare";
+import { ConversationPage } from "./pages/Conversation";
 import { ExportPage } from "./pages/Export";
 import { LoginPage } from "./pages/Login";
 import { OverviewPage } from "./pages/Overview";
@@ -35,6 +36,7 @@ export default function App() {
       {page === "results" && <ResultsPage />}
       {page === "compare" && <ComparePage />}
       {page === "benchmarks" && <BenchmarksPage />}
+      {page === "conversation" && <ConversationPage />}
       {page === "export" && <ExportPage />}
       {page === "saved" && <SavedPage />}
     </Layout>

@@ -20,6 +20,8 @@ from app.context.package_models import (
 )
 from app.context.summarizer import llm_summary, python_outline
 from app.context.token_counter import get_token_counter, plan_budget
+from app.conversation.backends import backend_status
+from app.conversation.config import get_conversation_config
 from app.core.config import BENCHMARK_FILE, RankingWeights, Settings, get_settings
 from app.core.exceptions import BudgetExceededError, InvalidRepositoryError, PathSecurityError
 from app.core.logging_config import get_logger
@@ -104,11 +106,18 @@ class ACWMService:
 
     # ------------------------------------------------------------------ status
     def provider_statuses(self) -> dict[str, str]:
-        llm = get_llm_provider(
-            self.settings.llm_provider, self.settings.llm_model, self.settings.llm_timeout_seconds
-        )
+        statuses: dict[str, str] = {}
+        # The repository LLM is optional and off by default; only list it once configured.
+        if self.settings.llm_provider not in {"", "none"}:
+            llm = get_llm_provider(
+                self.settings.llm_provider,
+                self.settings.llm_model,
+                self.settings.llm_timeout_seconds,
+            )
+            statuses["llm"] = llm.status
+        statuses["conversation_manager"] = backend_status("manager", get_conversation_config())[1]
         return {
-            "llm": llm.status,
+            **statuses,
             "semantic": "available (sentence-transformers installed)"
             if semantic_dependencies_installed()
             else "unavailable (sentence-transformers not installed)",

@@ -192,3 +192,24 @@ test("accounts: each user has a private workspace and saved packages", async ({ 
   await ctxA.close();
   await ctxB.close();
 });
+
+test("conversation manager: dry-run benchmark with charts and compaction events", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  page.on("console", (m) => m.type() === "error" && consoleErrors.push(m.text()));
+  await page.goto("/");
+  await signUp(page, "Conv User");
+
+  // The optional repository LLM is hidden until configured; the manager row is shown.
+  await expect(page.getByText("conversation manager")).toBeVisible();
+  await expect(page.getByText("unconfigured (no LLM provider configured)")).toHaveCount(0);
+
+  await nav(page, "Conversation");
+  await expect(page.getByRole("heading", { name: "Conversation manager" })).toBeVisible();
+  await page.getByRole("button", { name: "Run benchmark" }).click();
+  await expect(page.getByText("ACWM compaction events")).toBeVisible();
+  await expect(page.getByText(/overflow at \d+/)).toBeVisible();
+  await expect(page.getByText("manager LLM").first()).toBeVisible();
+  await expect(page.getByRole("img", { name: /Tokens sent to the main model/ })).toBeVisible();
+  await shot(page, "13-conversation-benchmark");
+  expect(consoleErrors.filter((e) => !e.includes("width(0) and height(0)"))).toEqual([]);
+});

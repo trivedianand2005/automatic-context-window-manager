@@ -32,6 +32,35 @@ const pkg = {
   research_findings: [], latency_ms: 51, disclaimer: "Heuristic selection.",
 };
 
+const convTurn = (turn: number, context_tokens: number, compaction: "llm" | null = null) => ({
+  turn, context_tokens, usage_ratio: context_tokens / 4000, main_model: "claude-opus-5-5", main_input_tokens: context_tokens,
+  main_output_tokens: 20, main_cost_usd: 0.001, manager_calls: compaction ? 1 : 0, manager_input_tokens: compaction ? 900 : 0,
+  manager_output_tokens: compaction ? 200 : 0, manager_latency_ms: compaction ? 850 : 0, manager_cost_usd: compaction ? 0.0002 : 0, compaction,
+});
+const convSummary = (strategy: string, recall_correct: number, overflow_turn: number | null = null) => ({
+  strategy, turns_completed: overflow_turn ? overflow_turn - 1 : 3, overflow_turn, main_input_tokens: 9000, main_output_tokens: 60,
+  manager_input_tokens: strategy === "acwm" ? 900 : 0, manager_output_tokens: strategy === "acwm" ? 200 : 0, total_tokens: 9260,
+  main_cost_usd: 0.04, manager_cost_usd: strategy === "acwm" ? 0.0002 : 0, total_cost_usd: 0.0402, manager_calls: strategy === "acwm" ? 1 : 0,
+  manager_latency_ms: 850, compactions: strategy === "acwm" ? 1 : 0, manager_failures: 0, recall_correct, recall_total: 1,
+  recall_accuracy: recall_correct,
+});
+const convAnswer = (correct: boolean) => ({
+  question_id: "q3", turn: 3, fact_turn: 1, question: "What is the project codename again?", expected_keywords: ["bluejay"], answer: "(context echo)", correct,
+});
+const convResults = {
+  mode: "dry-run (mock models; accuracy = fact retention in context)", budget_tokens: 4000, main_model: "claude-opus-5-5",
+  manager_model: "claude-haiku-5-5", judge: "keyword", turns: 3, recall_questions: 1,
+  summary: [convSummary("full", 0, 3), convSummary("truncation", 0), convSummary("acwm", 1)],
+  per_turn: { full: [convTurn(1, 1000), convTurn(2, 3900)], truncation: [convTurn(1, 1000), convTurn(2, 3900), convTurn(3, 3990)], acwm: [convTurn(1, 1000), convTurn(2, 1900, "llm"), convTurn(3, 2100)] },
+  answers: { full: [], truncation: [convAnswer(false)], acwm: [convAnswer(true)] },
+};
+const convStatus = {
+  manager: { backend: "anthropic", model: "claude-haiku-5-5", real_model: false, status: "heuristic mode (add ANTHROPIC_API_KEY to use claude-haiku-5-5)" },
+  main_model: { backend: "anthropic", model: "claude-opus-5-5", real_model: false, status: "not available (add ANTHROPIC_API_KEY to use claude-opus-5-5)" },
+  live_runs_enabled: false, live_available: false, default_budget_tokens: 4000,
+  context: { compact_threshold: 0.75, compact_target: 0.5, keep_recent_turns: 4, cooldown_turns: 3 },
+};
+
 interface FakeAccount { id: number; email: string; password: string; name: string }
 
 /** A small fake ACWM server: accounts, bearer tokens and per-user saved packages. */
@@ -54,7 +83,8 @@ function mockApi(opts: { github?: boolean; seed?: FakeAccount[] } = {}) {
     const me = accounts.find((a) => auth === `Bearer ${tokenFor(a)}`);
     const body = init?.body ? JSON.parse(String(init.body)) : {};
 
-    if (path === "/health") return json({ status: "ok", version: "0.1.0", providers: { llm: "unconfigured" } });
+    if (path === "/health") return json({ status: "ok", version: "0.1.0", providers: { conversation_manager: convStatus.manager.status } });
+    if (path === "/conversation/status") return json(convStatus);
     if (path === "/config") return json({ sample_repository_path: "/srv/examples/sample_fastapi_repo", example_repositories: [], budget: { total_tokens: 8000, reserved_system_tokens: 400, reserved_response_tokens: 1500, safety_margin_ratio: 0.05, per_item_overhead_tokens: 24 }, weights: { lexical: 0.35, filename: 0.1, symbol: 0.15, dependency: 0.2, test: 0.1, config: 0.05, semantic: 0 }, expansion_depth: 2, modes: {}, tokenizer_encoding: "cl100k_base", providers: {} });
     if (path === "/benchmarks") return json({ repository: "examples/sample_fastapi_repo", tasks: [{ id: "jwt-auth", task: "Add JWT authentication", relevant: [], rationale: "" }], labeling_notes: "" });
     if (path === "/auth/providers") return json({ email_password: true, github: !!opts.github, require_auth: true, database: "postgresql" });
@@ -75,6 +105,7 @@ function mockApi(opts: { github?: boolean; seed?: FakeAccount[] } = {}) {
     if (path === "/repositories/index") return json({ repository: summary, report });
     if (path.startsWith("/repositories/abc123")) return json({ repository: summary, report, files: [], symbols: {}, graph: { nodes: [], edges: [] } });
     if (path === "/context/build") return json(pkg);
+    if (path === "/conversation/benchmark") return json(convResults);
     const mine = saved.get(me.id) ?? [];
     const summaryOf = (p: { id: number; title: string }) => ({ id: p.id, title: p.title, task: pkg.task, repository_name: "sample_fastapi_repo", item_count: 2, rendered_tokens: 1850, created_at: "2026-10-21T00:00:00Z" });
     if (path === "/packages" && method === "GET") return json(mine.map(summaryOf));
@@ -195,6 +226,25 @@ describe("App", () => {
     expect(screen.getByText("Octo")).toBeInTheDocument();
     expect(window.location.hash).toBe("");
     expect(localStorage.getItem("acwm-auth-token")).toBe("token-1");
+  });
+
+  it("runs the conversation benchmark and shows strategies, compactions and recall", async () => {
+    const calls = mockApi();
+    const user = userEvent.setup();
+    render(<StoreProvider><App /></StoreProvider>);
+    await signUp(user, "conv@example.com");
+    await user.click(nav().getByRole("button", { name: "Conversation" }));
+    expect(await screen.findByRole("heading", { name: "Conversation manager" })).toBeInTheDocument();
+    expect(await screen.findByText(/heuristic mode \(add ANTHROPIC_API_KEY/)).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Live \(disabled on this server\)/ })).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "Run benchmark" }));
+    expect(await screen.findByText("ACWM compaction events")).toBeInTheDocument();
+    expect(calls).toContain("POST /conversation/benchmark");
+    expect(screen.getByText("What is the project codename again?")).toBeInTheDocument();
+    expect(screen.getByText(/overflow at 3/)).toBeInTheDocument();
+    expect(screen.getByText("manager LLM")).toBeInTheDocument();
+    expect(screen.getByLabelText("correct")).toBeInTheDocument();
   });
 
   it("shows the GitHub error message from the redirect fragment", async () => {

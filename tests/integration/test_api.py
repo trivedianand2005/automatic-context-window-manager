@@ -22,7 +22,50 @@ def repo_id(client):
 
 def test_health(client):
     body = client.get("/health").json()
-    assert body["status"] == "ok" and {"llm", "semantic", "tinyfish"} <= set(body["providers"])
+    providers = body["providers"]
+    assert body["status"] == "ok"
+    assert {"conversation_manager", "semantic", "tinyfish"} <= set(providers)
+    # The optional repository LLM is only listed once it is configured.
+    assert "llm" not in providers
+
+
+def test_health_lists_llm_when_configured():
+    settings = Settings(allowed_roots=[SAMPLE_REPO_PATH.parent], llm_provider="anthropic")
+    providers = TestClient(create_app(settings)).get("/health").json()["providers"]
+    assert "llm" in providers
+
+
+def test_conversation_status(client):
+    body = client.get("/conversation/status").json()
+    assert body["manager"]["model"] and body["main_model"]["model"]
+    assert body["live_runs_enabled"] is False and body["live_available"] is False
+    assert body["context"]["compact_threshold"] == 0.75
+
+
+def test_conversation_benchmark_dry_run(client):
+    r = client.post("/conversation/benchmark", json={"mode": "dry-run", "budget_tokens": 4000})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    summary = {s["strategy"]: s for s in body["summary"]}
+    assert set(summary) == {"full", "truncation", "acwm"}
+    assert summary["acwm"]["compactions"] >= 1
+    assert len(body["per_turn"]["acwm"]) == body["turns"]
+    assert client.post("/conversation/benchmark", json={"budget_tokens": 10}).status_code == 422
+
+
+def test_conversation_benchmark_live_is_disabled_by_default(client):
+    r = client.post("/conversation/benchmark", json={"mode": "live"})
+    assert r.status_code == 501 and r.json()["error"]["code"] == "not_configured"
+
+
+def test_conversation_benchmark_live_needs_main_model(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    settings = Settings(allowed_roots=[SAMPLE_REPO_PATH.parent], conversation_live_enabled=True)
+    live = TestClient(create_app(settings))
+    assert live.get("/conversation/status").json()["live_runs_enabled"] is True
+    r = live.post("/conversation/benchmark", json={"mode": "live"})
+    assert r.status_code == 501 and "ANTHROPIC_API_KEY" in r.json()["error"]["message"]
 
 
 def test_openapi_documents_endpoints(client):
@@ -36,6 +79,8 @@ def test_openapi_documents_endpoints(client):
         "/context/export",
         "/benchmarks",
         "/benchmarks/run",
+        "/conversation/status",
+        "/conversation/benchmark",
     ):
         assert p in paths
 

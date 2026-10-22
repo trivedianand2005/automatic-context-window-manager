@@ -181,3 +181,28 @@ class SavedPackageSummary(BaseModel):
 
 class SavedPackageOut(SavedPackageSummary):
     package: ContextPackage
+
+
+class ConversationBenchmarkRequest(BaseModel):
+    mode: Literal["dry-run", "live"] = Field(
+        "dry-run", description="dry-run uses mock models; live calls the configured models"
+    )
+    budget_tokens: int | None = Field(
+        None, ge=1000, le=16000, description="Token budget (default: config.yaml)"
+    )
+
+
+class ConversationModelStatus(BaseModel):
+    backend: str
+    model: str
+    real_model: bool = Field(description="True when a real model will be called")
+    status: str
+
+
+class ConversationStatus(BaseModel):
+    manager: ConversationModelStatus
+    main_model: ConversationModelStatus
+    live_runs_enabled: bool
+    live_available: bool
+    default_budget_tokens: int
+    context: dict

@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from app import __version__
 from app.api.auth_routes import router as auth_router
+from app.api.conversation_routes import router as conversation_router
 from app.api.deps import SESSION_HEADER
 from app.api.routes import router
 from app.core.config import Settings, get_settings
@@ -126,6 +127,7 @@ def create_app(settings: Settings | None = None, service: ACWMService | None = N
 
     app.include_router(router)
     app.include_router(auth_router)
+    app.include_router(conversation_router)
     return app
 
 

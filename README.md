@@ -209,7 +209,8 @@ formula and the optimizer details.
 ```
 app/
   streamlit_app.py           Streamlit UI
-  api/                       FastAPI app (main.py), routes.py, schemas.py
+  api/                       FastAPI app (main.py), routes.py, auth_routes.py,
+                             conversation_routes.py, schemas.py
   services/                  acwm_service.py (shared business logic), options.py
   core/                      config.py, exceptions.py, logging_config.py, models.py
   ingestion/                 repository_scanner.py, file_filter.py, language_detector.py
@@ -281,6 +282,7 @@ Copy `.env.example` to `.env`. Every variable is optional.
 | `ACWM_LLM_MODEL` | `claude-opus-5-5` | Model for the Anthropic provider |
 | `ANTHROPIC_API_KEY` | (empty) | Read by the Anthropic SDK; never logged |
 | `ACWM_CONFIG` | `config.yaml` | Conversation manager config file (models, thresholds, prices) |
+| `ACWM_CONVERSATION_LIVE` | `false` | `true` allows live (billed) runs of `POST /conversation/benchmark` and the Conversation page |
 | `ACWM_TINYFISH_ENABLED` | `false` | Default for the research toggle |
 | `TINYFISH_API_KEY` | (empty) | Real TinyFish Search API; when empty, the mock is used |
 | `ACWM_TINYFISH_INCLUDE_DOMAINS` | FastAPI, Pydantic and Python docs | Domains to search |
@@ -345,9 +347,13 @@ The demo runs offline in about 5 minutes and needs no keys.
       comparison*.
    5. **Export:** preview and download Markdown or JSON.
    6. **Benchmarks:** click *Run benchmarks*. All numbers are measured live.
-3. Optionally, open `http://127.0.0.1:8000/docs` and try `POST /context/compare`.
-4. Be candid about limitations: the static-import view, a small benchmark built by the
-   same author, and tiktoken estimates.
+3. In the web app, open **Conversation** and click *Run benchmark*. Show the context-size
+   chart (no management overflows, truncation sits at the budget, ACWM drops at each
+   manager compaction), the compaction events table and the recall questions.
+4. Optionally, open `http://127.0.0.1:8000/docs` and try `POST /context/compare`.
+5. Be candid about limitations: the static-import view, a small benchmark built by the
+   same author, tiktoken estimates, and that the conversation dry run measures fact
+   retention with mock models, not answer quality.
 
 ## Example task and context package
 
@@ -620,6 +626,32 @@ with: tokens sent to the main model, main-model input/output tokens, manager tok
 manager latency, estimated cost (prices from `config.yaml`), and whether compaction fired
 (`llm` or `heuristic`).
 
+### In the web app
+
+The **Conversation** page runs the benchmark on the server and shows:
+
+* which manager and main model the server will use (from `config.yaml`), and whether
+  a real model is available;
+* context size per turn for all three strategies, with each manager compaction and the
+  no-management overflow marked;
+* estimated cost (main model vs manager) and recall per strategy;
+* every compaction event (turn, mode, context after, manager tokens, latency, cost);
+* each recall question, with a tick or cross per strategy.
+
+Dry run is the default and needs no keys. **Live** mode calls the configured models and
+costs money, so it is only enabled when the server sets `ACWM_CONVERSATION_LIVE=true`
+and has `ANTHROPIC_API_KEY` (or Ollama backends). Only one live run can be active at a
+time.
+
+The Overview page's *Optional providers* panel shows a **conversation manager** row, for
+example `heuristic mode (add ANTHROPIC_API_KEY to use claude-haiku-5-5)` or
+`anthropic/claude-haiku-5-5 (configured; ...)`. The optional repository **llm** row only
+appears once `ACWM_LLM_PROVIDER` is set.
+
+API: `GET /conversation/status` and `POST /conversation/benchmark`
+(`{"mode": "dry-run" | "live", "budget_tokens": 4000}`); see
+[docs/api.md](docs/api.md).
+
 ### Running the benchmark
 
 ```bash
@@ -699,6 +731,8 @@ Details and the documentation check date are in
 | GET | `/auth/github/login`, `/auth/github/callback` | GitHub OAuth login |
 | GET, POST | `/packages` | List or save this user's context packages |
 | GET, DELETE | `/packages/{id}` | Open or delete one saved package |
+| GET | `/conversation/status` | Manager and main model in use, live-run availability, context settings |
+| POST | `/conversation/benchmark` | Run the conversation benchmark (dry-run or live) |
 
 Request and response formats are in [docs/api.md](docs/api.md), and the interactive docs
 are at `/docs`.
@@ -725,7 +759,8 @@ The suite covers:
 * TinyFish (mocked HTTP), the LLM provider (mocked) and fallbacks;
 * the conversation manager with a mocked manager LLM: threshold trigger and cooldown,
   JSON validation, retry and heuristic fallback, pinned-fact merging, eviction order,
-  backends (Ollama via mocked HTTP) and a dry-run benchmark;
+  backends (Ollama via mocked HTTP), a dry-run benchmark, the `/conversation` endpoints
+  and the Conversation page (unit test and Playwright);
 * every API endpoint, with valid and invalid requests;
 * the main Streamlit workflow.
 

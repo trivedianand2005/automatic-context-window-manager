@@ -7,6 +7,8 @@ import type {
   AuthProviders,
   AuthResponse,
   ContextPackage,
+  ConversationResults,
+  ConversationStatus,
   ExportFormat,
   Health,
   IndexResponse,
@@ -227,5 +229,13 @@ export const api = {
       method: "POST",
       body: { token_budget },
       timeoutMs: 180_000,
+    }),
+  conversationStatus: () => request<ConversationStatus>("/conversation/status"),
+  runConversationBenchmark: (mode: "dry-run" | "live", budget_tokens: number) =>
+    request<ConversationResults>("/conversation/benchmark", {
+      method: "POST",
+      body: { mode, budget_tokens },
+      // Live runs make real model calls and can take a few minutes.
+      timeoutMs: mode === "live" ? 660_000 : 120_000,
     }),
 };

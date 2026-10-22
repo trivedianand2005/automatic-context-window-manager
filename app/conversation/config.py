@@ -8,6 +8,7 @@ appear here. A missing file means the defaults below.
 from __future__ import annotations
 
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
@@ -97,3 +98,8 @@ def load_conversation_config(path: Path | None = None) -> ConversationConfig:
         return ConversationConfig()
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return ConversationConfig(**data)
+
+
+@lru_cache(maxsize=1)
+def get_conversation_config() -> ConversationConfig:
+    return load_conversation_config()

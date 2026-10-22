@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased: conversation manager in the web app
+
+### Added
+
+- **Conversation page** in the web app: runs the conversation benchmark on the server and
+  shows the models in use, context size per turn (with compactions and the no-management
+  overflow marked), cost and recall charts, a summary table, compaction events and
+  per-question results.
+- **API**: `GET /conversation/status` (public) and `POST /conversation/benchmark`
+  (dry-run by default and cached; live runs need `ACWM_CONVERSATION_LIVE=true`, one at a
+  time, 600 s timeout).
+- `conversation_manager` row in `/health` providers (shown on Overview).
+- Tests: API tests for the new endpoints and auth, a frontend unit test and a Playwright
+  test for the Conversation page.
+
+### Changed
+
+- The optional repository `llm` provider row is no longer shown in `/health` (and on the
+  Overview page) until `ACWM_LLM_PROVIDER` is configured, so the live site no longer shows
+  "unconfigured (no LLM provider configured)".
+- README, `docs/api.md`, `.env.example` and `render.yaml` document the new page,
+  endpoints and `ACWM_CONVERSATION_LIVE`.
+
 ## Unreleased: hybrid conversation manager
 
 ### Added

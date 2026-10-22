@@ -17,7 +17,8 @@ import type {
 } from "./types";
 
 export type Page =
-  | "overview" | "repository" | "build" | "results" | "compare" | "benchmarks" | "export" | "saved";
+  | "overview" | "repository" | "build" | "results" | "compare" | "benchmarks" | "conversation"
+  | "export" | "saved";
 export type ApiStatus = "connecting" | "online" | "offline";
 
 export const EXAMPLE_TASK =

@@ -92,10 +92,12 @@ Returns the status, version and provider status:
 
 ```json
 {"status": "ok", "version": "0.1.0",
- "providers": {"llm": "unconfigured (no LLM provider configured)",
+ "providers": {"conversation_manager": "heuristic mode (add ANTHROPIC_API_KEY to use claude-haiku-5-5)",
                "semantic": "unavailable (sentence-transformers not installed)",
                "tinyfish": "disabled", "tinyfish_last_call": "not used"}}
 ```
+
+The optional repository `llm` provider is only listed once `ACWM_LLM_PROVIDER` is set.
 
 ### `POST /repositories/index`
 
@@ -208,6 +210,39 @@ Lists the labelled benchmark tasks from `benchmarks/sample_fastapi_tasks.json`.
 
 Indexes the sample repository and runs every task with all three methods. Returns
 per-task comparisons and aggregate means. All numbers are measured at request time.
+
+### `GET /conversation/status`
+
+Public. Which models the conversation manager will use (from `config.yaml`) and whether
+live benchmark runs are possible. Never calls a model.
+
+```json
+{"manager": {"backend": "anthropic", "model": "claude-haiku-5-5", "real_model": false,
+             "status": "heuristic mode (add ANTHROPIC_API_KEY to use claude-haiku-5-5)"},
+ "main_model": {"backend": "anthropic", "model": "claude-opus-5-5", "real_model": false,
+                "status": "not available (add ANTHROPIC_API_KEY to use claude-opus-5-5)"},
+ "live_runs_enabled": false, "live_available": false, "default_budget_tokens": 4000,
+ "context": {"total_tokens": 8000, "compact_threshold": 0.75, "compact_target": 0.5, "...": "..."}}
+```
+
+### `POST /conversation/benchmark`
+
+Requires login when `ACWM_REQUIRE_AUTH` is on.
+
+```json
+{"mode": "dry-run", "budget_tokens": 4000}
+```
+
+Runs the 80-turn conversation through `full`, `truncation` and `acwm`. Returns `summary`
+(one row per strategy: tokens, manager tokens and latency, estimated cost, compactions,
+recall), `per_turn` metrics per strategy, and `answers` per strategy. `budget_tokens` is
+1000-16000 (default from `config.yaml`).
+
+* `dry-run` (default): mock models, no keys, deterministic and cached. Recall means the
+  fact was still in the context.
+* `live`: real model calls (billed). Returns `501 not_configured` unless the server sets
+  `ACWM_CONVERSATION_LIVE=true` and the main model is available, and `429 rate_limited`
+  while another live run is in progress. Timeout: 600 seconds.
 
 ## Example session (curl)
 

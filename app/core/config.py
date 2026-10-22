@@ -96,6 +96,8 @@ class Settings(BaseModel):
     jwt_ttl_minutes: int = Field(7 * 24 * 60, ge=5, le=60 * 24 * 90)
     # When true, repository/context endpoints need a logged-in user (production).
     require_auth: bool = False
+    # Allow POST /conversation/benchmark in live mode (real, billed model calls).
+    conversation_live_enabled: bool = False
     github_client_id: str | None = None
     github_client_secret: str | None = Field(None, repr=False)
     # Where the browser is sent after GitHub login, and the public URL of this API.
@@ -161,6 +163,7 @@ def load_settings(env_file: Path | None = None) -> Settings:
         data["jwt_secret"] = secret
         data["jwt_secret_from_env"] = True
     data["require_auth"] = _env_bool("ACWM_REQUIRE_AUTH", False)
+    data["conversation_live_enabled"] = _env_bool("ACWM_CONVERSATION_LIVE", False)
     data["github_client_id"] = os.getenv("GITHUB_CLIENT_ID") or None
     data["github_client_secret"] = os.getenv("GITHUB_CLIENT_SECRET") or None
     if url := os.getenv("ACWM_FRONTEND_URL"):

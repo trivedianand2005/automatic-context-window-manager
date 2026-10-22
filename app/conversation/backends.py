@@ -240,3 +240,21 @@ def build_backend(
         log.warning("%s: Anthropic backend unavailable (no API key); falling back.", role)
         return None
     return backend
+
+
+def backend_status(role: str, cfg: ConversationConfig) -> tuple[bool, str]:
+    """(will a real model be used?, human-readable status) for ``role``. Never makes a call."""
+    settings: ModelSettings = getattr(cfg, role)
+    what = "manager" if role == "manager" else "main model"
+    if settings.backend == "none":
+        return False, f"heuristics only ({what} disabled in config.yaml)"
+    if settings.backend == "mock":
+        return False, "mock (testing only)"
+    if settings.backend == "ollama":
+        model = cfg.ollama.manager_model if role == "manager" else cfg.ollama.main_model
+        return True, f"ollama/{model} at {cfg.ollama.host} (unverified until a request succeeds)"
+    if AnthropicBackend(settings).available:
+        return True, f"anthropic/{settings.model} (configured; unverified until a request succeeds)"
+    if role == "manager":
+        return False, f"heuristic mode (add ANTHROPIC_API_KEY to use {settings.model})"
+    return False, f"not available (add ANTHROPIC_API_KEY to use {settings.model})"
