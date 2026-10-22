@@ -24,7 +24,7 @@ from app.conversation.backends import LLMBackend, MockBackend, build_backend
 from app.conversation.config import ConversationConfig
 from app.conversation.heuristics import mock_manager_responder
 from app.conversation.manager import ContextWindow, ConversationManager, build_manager
-from app.conversation.models import CompactionReport, TurnMetrics
+from app.conversation.models import BudgetReport, CompactionReport, TurnMetrics
 from app.conversation.pricing import PriceTable
 from app.conversation.prompts import JUDGE_PROMPT, JUDGE_SYSTEM
 from app.core.logging_config import get_logger
@@ -40,6 +40,16 @@ class FullContext(ConversationManager):
 
     def prepare(self) -> tuple[ContextWindow, CompactionReport | None]:
         return self.window(), None
+
+    def budget_report(self, compacted: bool = False) -> BudgetReport:
+        report = super().budget_report(compacted)
+        if report.exceeded:
+            report.message = (
+                f"Budget exceeded: the full history is {report.tokens:,} tokens but the budget "
+                f"is {report.total_tokens:,}. Without context management the conversation "
+                "cannot continue."
+            )
+        return report
 
 
 class NaiveTruncation(ConversationManager):
@@ -70,6 +80,7 @@ class StrategyResult:
     overflow_turn: int | None = None
     compactions: int = 0
     manager_failures: int = 0
+    budget_events: list[dict] = field(default_factory=list)
 
     def summary(self, total_questions: int) -> dict:
         correct = sum(a.correct for a in self.answers)
@@ -95,6 +106,8 @@ class StrategyResult:
             "manager_latency_ms": round(sum(t.manager_latency_ms for t in self.turns), 1),
             "compactions": self.compactions,
             "manager_failures": self.manager_failures,
+            "budget_exceeded_turns": sum(e["status"] == "over_budget" for e in self.budget_events),
+            "over_target_turns": sum(e["status"] == "over_target" for e in self.budget_events),
             "recall_correct": correct,
             "recall_total": total_questions,
             "recall_accuracy": round(correct / total_questions, 4) if total_questions else 0.0,
@@ -176,7 +189,15 @@ def run_strategy(
         if report is not None:
             result.compactions += 1
             result.manager_failures += int(report.error is not None and report.mode != "llm")
-        if window.tokens > budget:
+        if window.budget.status != "ok":
+            result.budget_events.append(
+                {
+                    "turn": turn.turn,
+                    "status": window.budget.status,
+                    "message": window.budget.message,
+                }
+            )
+        if window.budget.exceeded:
             if name == "full":
                 result.overflow_turn = turn.turn
                 log.info("%s: context overflowed the budget at turn %d.", name, turn.turn)
@@ -265,4 +286,5 @@ def run_benchmark(
         "summary": [r.summary(total_q) for r in results],
         "per_turn": {r.name: [t.model_dump() for t in r.turns] for r in results},
         "answers": {r.name: [a.__dict__ for a in r.answers] for r in results},
+        "budget_events": {r.name: r.budget_events for r in results},
     }

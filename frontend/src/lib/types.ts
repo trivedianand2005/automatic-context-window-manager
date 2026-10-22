@@ -326,6 +326,13 @@ export interface SavedPackageFull extends SavedPackageSummary {
 
 // ------------------------------------------------------------ conversation manager
 export type ConversationStrategy = "full" | "truncation" | "acwm";
+export type ConversationBudgetStatus = "ok" | "over_target" | "over_budget";
+
+export interface ConversationBudgetEvent {
+  turn: number;
+  status: Exclude<ConversationBudgetStatus, "ok">;
+  message: string;
+}
 
 export interface ConversationModelStatus {
   backend: string;
@@ -359,6 +366,8 @@ export interface ConversationSummary {
   manager_latency_ms: number;
   compactions: number;
   manager_failures: number;
+  budget_exceeded_turns: number;
+  over_target_turns: number;
   recall_correct: number;
   recall_total: number;
   recall_accuracy: number;
@@ -378,6 +387,8 @@ export interface ConversationTurn {
   manager_latency_ms: number;
   manager_cost_usd: number;
   compaction: "llm" | "heuristic" | null;
+  budget_status: ConversationBudgetStatus;
+  budget_exceeded: boolean;
 }
 
 export interface ConversationAnswer {
@@ -401,4 +412,17 @@ export interface ConversationResults {
   summary: ConversationSummary[];
   per_turn: Record<ConversationStrategy, ConversationTurn[]>;
   answers: Record<ConversationStrategy, ConversationAnswer[]>;
+  budget_events: Record<ConversationStrategy, ConversationBudgetEvent[]>;
+}
+
+/** `details` of a 422 `budget_exceeded` error from POST /context/build. */
+export interface BudgetIssue {
+  reason: "reservations" | "required_files";
+  message: string;
+  total_budget: number;
+  needed_tokens: number;
+  available_tokens: number;
+  shortfall_tokens: number;
+  reservations: { system: number; task: number; response: number; safety_margin: number };
+  suggested_budget: number;
 }

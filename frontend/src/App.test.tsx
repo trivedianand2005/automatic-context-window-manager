@@ -36,13 +36,14 @@ const convTurn = (turn: number, context_tokens: number, compaction: "llm" | null
   turn, context_tokens, usage_ratio: context_tokens / 4000, main_model: "claude-opus-5-5", main_input_tokens: context_tokens,
   main_output_tokens: 20, main_cost_usd: 0.001, manager_calls: compaction ? 1 : 0, manager_input_tokens: compaction ? 900 : 0,
   manager_output_tokens: compaction ? 200 : 0, manager_latency_ms: compaction ? 850 : 0, manager_cost_usd: compaction ? 0.0002 : 0, compaction,
+  budget_status: compaction ? "over_target" : "ok", budget_exceeded: false,
 });
 const convSummary = (strategy: string, recall_correct: number, overflow_turn: number | null = null) => ({
   strategy, turns_completed: overflow_turn ? overflow_turn - 1 : 3, overflow_turn, main_input_tokens: 9000, main_output_tokens: 60,
   manager_input_tokens: strategy === "acwm" ? 900 : 0, manager_output_tokens: strategy === "acwm" ? 200 : 0, total_tokens: 9260,
   main_cost_usd: 0.04, manager_cost_usd: strategy === "acwm" ? 0.0002 : 0, total_cost_usd: 0.0402, manager_calls: strategy === "acwm" ? 1 : 0,
   manager_latency_ms: 850, compactions: strategy === "acwm" ? 1 : 0, manager_failures: 0, recall_correct, recall_total: 1,
-  recall_accuracy: recall_correct,
+  recall_accuracy: recall_correct, budget_exceeded_turns: overflow_turn ? 1 : 0, over_target_turns: strategy === "acwm" ? 1 : 0,
 });
 const convAnswer = (correct: boolean) => ({
   question_id: "q3", turn: 3, fact_turn: 1, question: "What is the project codename again?", expected_keywords: ["bluejay"], answer: "(context echo)", correct,
@@ -53,6 +54,11 @@ const convResults = {
   summary: [convSummary("full", 0, 3), convSummary("truncation", 0), convSummary("acwm", 1)],
   per_turn: { full: [convTurn(1, 1000), convTurn(2, 3900)], truncation: [convTurn(1, 1000), convTurn(2, 3900), convTurn(3, 3990)], acwm: [convTurn(1, 1000), convTurn(2, 1900, "llm"), convTurn(3, 2100)] },
   answers: { full: [], truncation: [convAnswer(false)], acwm: [convAnswer(true)] },
+  budget_events: {
+    full: [{ turn: 3, status: "over_budget", message: "Budget exceeded: the context is 4,100 tokens but the budget is 4,000." }],
+    truncation: [],
+    acwm: [{ turn: 2, status: "over_target", message: "Compaction could not reach the 50% target (2,000 tokens)." }],
+  },
 };
 const convStatus = {
   manager: { backend: "anthropic", model: "claude-haiku-5-5", real_model: false, status: "heuristic mode (add ANTHROPIC_API_KEY to use claude-haiku-5-5)" },
@@ -104,6 +110,12 @@ function mockApi(opts: { github?: boolean; seed?: FakeAccount[] } = {}) {
     if (path.startsWith("/runs")) return json([]);
     if (path === "/repositories/index") return json({ repository: summary, report });
     if (path.startsWith("/repositories/abc123")) return json({ repository: summary, report, files: [], symbols: {}, graph: { nodes: [], edges: [] } });
+    if (path === "/context/build" && body.token_budget < 2000) {
+      return json({ error: { code: "budget_exceeded", message: "Token budget is too small after reserving system, task, response and safety margin tokens. Try at least 2,500 tokens.", details: {
+        reason: "reservations", total_budget: body.token_budget, needed_tokens: 256, available_tokens: 0, shortfall_tokens: 256,
+        reservations: { system: 400, task: 31, response: 1500, safety_margin: 50 }, suggested_budget: 2500,
+      } } }, 422);
+    }
     if (path === "/context/build") return json(pkg);
     if (path === "/conversation/benchmark") return json(convResults);
     const mine = saved.get(me.id) ?? [];
@@ -245,6 +257,31 @@ describe("App", () => {
     expect(screen.getByText(/overflow at 3/)).toBeInTheDocument();
     expect(screen.getByText("manager LLM")).toBeInTheDocument();
     expect(screen.getByLabelText("correct")).toBeInTheDocument();
+    // Budget reporting: summary column and the budget events list.
+    expect(screen.getByText("1 turn")).toBeInTheDocument();
+    expect(screen.getByText(/Budget exceeded: the context is 4,100 tokens/)).toBeInTheDocument();
+    expect(screen.getByText(/could not reach the 50% target/)).toBeInTheDocument();
+  });
+
+  it("explains a budget-exceeded build and rebuilds with the suggested budget", async () => {
+    const calls = mockApi();
+    const user = userEvent.setup();
+    render(<StoreProvider><App /></StoreProvider>);
+    await signUp(user, "budget@example.com");
+    await user.click(nav().getByRole("button", { name: "Build context" }));
+    const budget = await screen.findByLabelText("Total token budget");
+    await user.clear(budget);
+    await user.type(budget, "1000");
+    await user.click(within(screen.getByRole("main")).getByRole("button", { name: "Build context" }));
+
+    const panel = await screen.findByRole("alert", { name: "Budget exceeded" });
+    expect(within(panel).getByText(/Try at least 2,500 tokens/)).toBeInTheDocument();
+    expect(within(panel).getByText("Short by")).toBeInTheDocument();
+    expect(within(panel).getByText("1,500")).toBeInTheDocument(); // reserved response
+
+    await user.click(within(panel).getByRole("button", { name: /Use 2,500 tokens and rebuild/ }));
+    expect(await screen.findByRole("heading", { name: "Results" })).toBeInTheDocument();
+    expect(calls.filter((c) => c === "POST /context/build")).toHaveLength(2);
   });
 
   it("shows the GitHub error message from the redirect fragment", async () => {

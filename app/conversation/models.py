@@ -8,6 +8,9 @@ from pydantic import BaseModel, Field
 
 Role = Literal["user", "assistant"]
 CompactionMode = Literal["llm", "heuristic"]
+# ok: within budget; over_target: compaction could not reach the target because protected
+# content is too large; over_budget: the window sent to the main model exceeds the budget.
+BudgetStatus = Literal["ok", "over_target", "over_budget"]
 
 
 class Message(BaseModel):
@@ -20,6 +23,9 @@ class Message(BaseModel):
     timestamp: float
     tokens: int
     pinned: bool = False
+    required: bool = Field(
+        False, description="Needed verbatim by the task (set by the manager); never evicted"
+    )
     score: int | None = Field(None, description="Importance 1-5, set at compaction time")
 
 
@@ -44,6 +50,10 @@ class ManagerOutput(BaseModel):
     pinned_facts: list[str]
     message_scores: list[MessageScore]
     superseded: list[str] = Field(default_factory=list)
+    required_for_task: list[str] = Field(
+        default_factory=list,
+        description="ids of messages the current task still needs word-for-word",
+    )
 
 
 # JSON Schema sent to the backend (Anthropic structured outputs / Ollama ``format``).
@@ -67,10 +77,33 @@ MANAGER_OUTPUT_SCHEMA: dict = {
             },
         },
         "superseded": {"type": "array", "items": {"type": "string"}},
+        "required_for_task": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["summary", "pinned_facts", "message_scores", "superseded"],
+    "required": [
+        "summary",
+        "pinned_facts",
+        "message_scores",
+        "superseded",
+        "required_for_task",
+    ],
     "additionalProperties": False,
 }
+
+
+class BudgetReport(BaseModel):
+    """Whether the context fits, and what is taking the space when it does not."""
+
+    status: BudgetStatus = "ok"
+    tokens: int
+    total_tokens: int
+    target_tokens: int
+    protected_tokens: int = Field(description="Tokens that compaction may not remove")
+    breakdown: dict[str, int] = Field(default_factory=dict)
+    message: str | None = None
+
+    @property
+    def exceeded(self) -> bool:
+        return self.status == "over_budget"
 
 
 class CompactionReport(BaseModel):
@@ -80,12 +113,14 @@ class CompactionReport(BaseModel):
     tokens_after: int
     summarized_ids: list[str] = Field(default_factory=list)
     kept_verbatim_ids: list[str] = Field(default_factory=list)
+    required_ids: list[str] = Field(default_factory=list)
     evicted_ids: list[str] = Field(default_factory=list)
     manager_calls: int = 0
     manager_input_tokens: int = 0
     manager_output_tokens: int = 0
     manager_latency_ms: float = 0.0
     manager_cost_usd: float = 0.0
+    target_reached: bool = True
     error: str | None = None
 
 
@@ -105,6 +140,8 @@ class TurnMetrics(BaseModel):
     manager_latency_ms: float = 0.0
     manager_cost_usd: float = 0.0
     compaction: CompactionMode | None = None
+    budget_status: BudgetStatus = "ok"
+    budget_exceeded: bool = False
 
     @property
     def total_cost_usd(self) -> float:

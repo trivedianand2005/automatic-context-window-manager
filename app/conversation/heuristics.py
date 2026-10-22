@@ -15,6 +15,12 @@ from app.conversation.models import ManagerOutput, Message, MessageScore
 SUMMARY_LINE_WORDS = 25
 MAX_FACT_CHARS = 220
 SHORT_MESSAGE_TOKENS = 12
+REQUIRED_MIN_SHARED_TERMS = 2
+_TERM = re.compile(r"[a-z][a-z0-9_]{3,}")
+_STOP = {
+    "this", "that", "with", "from", "have", "what", "when", "will", "would", "could",
+    "should", "there", "their", "about", "which", "please", "thanks", "again", "into",
+}  # fmt: skip
 
 _SENTENCE = re.compile(r"(?<=[.!?])\s+")
 _PATH = re.compile(r"\b[\w./-]+\.(?:py|ts|tsx|js|json|ya?ml|md|toml|sql|cfg|ini|env)\b")
@@ -84,6 +90,19 @@ def score_message(msg: Message) -> int:
     return max(1, min(5, score))
 
 
+def _terms(text: str) -> set[str]:
+    """Content words, with a trailing plural "s" dropped so "splits" matches "split"."""
+    words = (t for t in _TERM.findall(text.lower()) if t not in _STOP)
+    return {t[:-1] if len(t) > 4 and t.endswith("s") and not t.endswith("ss") else t for t in words}
+
+
+def is_required_for_task(msg: Message, current_request: str) -> bool:
+    """Heuristic: a code block that shares at least two terms with the current request."""
+    if "```" not in msg.content or not current_request:
+        return False
+    return len(_terms(msg.content) & _terms(current_request)) >= REQUIRED_MIN_SHARED_TERMS
+
+
 def cap_summary(text: str, counter: TokenCounter, max_tokens: int) -> str:
     """Keep the newest summary lines that fit; older lines go first."""
     lines = [ln for ln in text.splitlines() if ln.strip()]
@@ -111,7 +130,11 @@ def extractive_summary(
 
 
 def heuristic_output(
-    messages: list[Message], previous_summary: str, counter: TokenCounter, max_summary_tokens: int
+    messages: list[Message],
+    previous_summary: str,
+    counter: TokenCounter,
+    max_summary_tokens: int,
+    current_request: str = "",
 ) -> ManagerOutput:
     return ManagerOutput(
         summary=extractive_summary(messages, previous_summary, counter, max_summary_tokens),
@@ -120,6 +143,7 @@ def heuristic_output(
             MessageScore(id=m.id, score=score_message(m), reason="heuristic") for m in messages
         ],
         superseded=[],
+        required_for_task=[m.id for m in messages if is_required_for_task(m, current_request)],
     )
 
 
@@ -127,6 +151,7 @@ _MESSAGE_TAG = re.compile(
     r'<message id="([^"]+)" role="(user|assistant)" turn="(\d+)">\n(.*?)\n</message>', re.DOTALL
 )
 _PREVIOUS = re.compile(r"<previous_summary>\n(.*?)\n</previous_summary>", re.DOTALL)
+_CURRENT = re.compile(r"<current_request>\n(.*?)\n</current_request>", re.DOTALL)
 
 
 def mock_manager_responder(counter: TokenCounter, max_summary_tokens: int):
@@ -149,7 +174,11 @@ def mock_manager_responder(counter: TokenCounter, max_summary_tokens: int):
         previous = prev.group(1).strip() if prev else ""
         if previous == "(none)":
             previous = ""
-        out = heuristic_output(msgs, previous, counter, max_summary_tokens)
+        cur = _CURRENT.search(prompt)
+        current = cur.group(1).strip() if cur else ""
+        out = heuristic_output(
+            msgs, previous, counter, max_summary_tokens, "" if current == "(none)" else current
+        )
         return json.dumps(out.model_dump())
 
     return respond

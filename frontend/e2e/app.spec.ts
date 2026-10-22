@@ -213,3 +213,17 @@ test("conversation manager: dry-run benchmark with charts and compaction events"
   await shot(page, "13-conversation-benchmark");
   expect(consoleErrors.filter((e) => !e.includes("width(0) and height(0)"))).toEqual([]);
 });
+
+test("budget exceeded: build explains the shortfall and the suggested budget works", async ({ page }) => {
+  await page.goto("/");
+  await signUp(page, "Budget User");
+  await nav(page, "Build context");
+  await page.getByLabel("Total token budget").fill("1000");
+  await page.getByRole("main").getByRole("button", { name: "Build context" }).click();
+  const panel = page.getByRole("alert", { name: "Budget exceeded" });
+  await expect(panel).toBeVisible();
+  await expect(panel.getByText("Short by")).toBeVisible();
+  await shot(page, "14-budget-exceeded");
+  await panel.getByRole("button", { name: /and rebuild/ }).click();
+  await expect(page.getByRole("heading", { name: "Results" })).toBeVisible();
+});

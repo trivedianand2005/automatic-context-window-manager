@@ -18,10 +18,10 @@ from app.conversation.config import (
     load_conversation_config,
 )
 from app.conversation.facts import fact_key, merge_facts
-from app.conversation.heuristics import mock_manager_responder
+from app.conversation.heuristics import is_required_for_task, mock_manager_responder
 from app.conversation.manager import ConversationManager
 from app.conversation.manager_llm import ManagerLLM
-from app.conversation.models import Fact
+from app.conversation.models import MANAGER_OUTPUT_SCHEMA, Fact, Message
 from app.conversation.pricing import PriceTable
 from app.conversation.structured import InvalidManagerOutput, parse_manager_output
 from app.core.exceptions import ProviderError
@@ -358,3 +358,115 @@ def test_dry_run_benchmark_runs_all_strategies_without_keys():
     assert acwm["recall_accuracy"] > summary["truncation"]["recall_accuracy"]
     assert acwm["main_input_tokens"] < summary["truncation"]["main_input_tokens"]
     assert max(t["context_tokens"] for t in results["per_turn"]["acwm"]) <= 4000
+    # Budget reporting: no-management overflows once; ACWM never exceeds the budget.
+    assert summary["full"]["budget_exceeded_turns"] == 1
+    assert acwm["budget_exceeded_turns"] == 0
+    assert results["budget_events"]["full"][-1]["status"] == "over_budget"
+    assert all(not t["budget_exceeded"] for t in results["per_turn"]["acwm"])
+
+
+# --- required_for_task ---------------------------------------------------------------
+
+CODE_MSG = "Here is the parser:\n```python\ndef parse_invoice(raw):\n    return raw.split(';')\n```"
+
+
+def test_required_for_task_kept_verbatim_and_never_evicted():
+    required_ids: list[str] = []
+
+    def respond(system, messages):
+        ids = ids_in(messages)
+        if not required_ids:
+            required_ids.append(ids[0])
+        reply = json.loads(valid_reply(score=1)(system, messages))
+        reply["required_for_task"] = [i for i in required_ids if i in ids]
+        assert "<current_request>" in messages[-1]["content"]
+        return json.dumps(reply)
+
+    mgr = make(MockBackend(respond))
+    reports = chat(mgr, 14)
+    first = next(r for r in reports if r is not None)
+    assert first.required_ids == required_ids
+    kept = next(m for m in mgr.messages if m.id == required_ids[0])
+    assert kept.required and kept.score == 1  # low score, still kept
+    assert kept not in mgr.eviction_order()
+    mgr._evict_until(0.0)
+    assert any(m.id == required_ids[0] for m in mgr.messages)
+
+
+def test_superseded_beats_required_for_task():
+    def respond(system, messages):
+        reply = json.loads(valid_reply(score=5)(system, messages))
+        ids = ids_in(messages)
+        reply["required_for_task"] = ids[:1]
+        reply["superseded"] = ids[:1]
+        return json.dumps(reply)
+
+    mgr = make(MockBackend(respond), compact_target=0.7)
+    reports = chat(mgr, 12)
+    first = next(r for r in reports if r is not None)
+    assert first.required_ids == []
+
+
+def test_output_without_required_for_task_is_still_valid():
+    out = parse_manager_output('{"summary": "s", "pinned_facts": [], "message_scores": []}')
+    assert out.required_for_task == []
+    assert "required_for_task" in MANAGER_OUTPUT_SCHEMA["required"]
+
+
+def test_heuristic_required_for_task_needs_code_and_shared_terms():
+    msg = Message(id="m1", role="user", content=CODE_MSG, turn=1, timestamp=0, tokens=20)
+    assert is_required_for_task(msg, "Fix parse_invoice so the raw split handles commas")
+    assert not is_required_for_task(msg, "What is the deadline?")
+    plain = msg.model_copy(update={"content": "parse_invoice splits raw text"})
+    assert not is_required_for_task(plain, "Fix parse_invoice raw split")
+
+
+def test_heuristic_fallback_marks_code_the_current_request_needs():
+    mgr = make(None)
+    code = mgr.add("user", CODE_MSG)
+    mgr.add("assistant", "Looks fine.")
+    # Every later request is about that code, so compaction keeps it verbatim.
+    reports = chat(mgr, 14, text="Please fix parse_invoice so raw input with commas splits too.")
+    assert any(r is not None and code.id in r.required_ids for r in reports)
+    kept = next((m for m in mgr.messages if m.id == code.id), None)
+    assert kept is not None and kept.required
+
+
+# --- budget-exceeded detection ---------------------------------------------------------
+
+
+def test_budget_report_ok_with_breakdown():
+    mgr = make(None)
+    chat(mgr, 2)
+    report = mgr.window().budget
+    assert report.status == "ok" and report.message is None
+    assert report.total_tokens == 400 and report.target_tokens == 200
+    assert report.breakdown["system_prompt"] > 0 and report.breakdown["recent_turns"] > 0
+    assert report.protected_tokens <= report.tokens
+
+
+def test_over_target_when_protected_content_is_too_large():
+    # Four protected recent turns alone exceed the 50% target.
+    mgr = make(MockBackend(valid_reply()), keep_recent_turns=4, total_tokens=300)
+    for _ in range(12):
+        mgr.add("user", FILLER)
+        window, report = mgr.prepare()
+        mgr.add("assistant", FILLER)
+        if report is not None:
+            break
+    assert report is not None and not report.target_reached
+    assert window.budget.status == "over_target"
+    assert "recent turns" in window.budget.message and "target" in window.budget.message
+    m = mgr.record_turn(window, report, "claude-opus-5-5")
+    assert m.budget_status == "over_target" and not m.budget_exceeded
+
+
+def test_over_budget_when_a_single_message_does_not_fit():
+    mgr = make(MockBackend(valid_reply()))
+    mgr.add("user", "word " * 600)
+    window, _ = mgr.prepare()
+    assert window.budget.exceeded and window.budget.status == "over_budget"
+    assert "Budget exceeded" in window.budget.message
+    assert "recent turns" in window.budget.message
+    m = mgr.record_turn(window, None, "claude-opus-5-5")
+    assert m.budget_exceeded and m.budget_status == "over_budget"

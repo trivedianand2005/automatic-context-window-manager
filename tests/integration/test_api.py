@@ -35,6 +35,34 @@ def test_health_lists_llm_when_configured():
     assert "llm" in providers
 
 
+def test_build_budget_exceeded_returns_structured_report(client, repo_id):
+    r = client.post(
+        "/context/build",
+        json={
+            "repository_id": repo_id,
+            "task": TASK,
+            "token_budget": 1000,
+            "reserved_response_tokens": 900,
+        },
+    )
+    assert r.status_code == 422
+    err = r.json()["error"]
+    assert err["code"] == "budget_exceeded"
+    details = err["details"]
+    assert details["reason"] == "reservations" and details["suggested_budget"] > 1000
+    assert details["reservations"]["response"] == 900
+    ok = client.post(
+        "/context/build",
+        json={
+            "repository_id": repo_id,
+            "task": TASK,
+            "token_budget": details["suggested_budget"],
+            "reserved_response_tokens": 900,
+        },
+    )
+    assert ok.status_code == 200, ok.text
+
+
 def test_conversation_status(client):
     body = client.get("/conversation/status").json()
     assert body["manager"]["model"] and body["main_model"]["model"]

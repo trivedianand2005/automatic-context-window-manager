@@ -5,6 +5,7 @@ import type {
   AuthProviders,
   BenchmarkReport,
   BenchmarkTask,
+  BudgetIssue,
   BuildRequest,
   ComparisonResult,
   ConfigResponse,
@@ -68,6 +69,9 @@ interface Store {
   busy: string | null;
   error: string | null;
   clearError: () => void;
+  /** Set when the last build failed because the budget was too small. */
+  budgetIssue: BudgetIssue | null;
+  clearBudgetIssue: () => void;
   notice: string | null;
   clearNotice: () => void;
 }
@@ -99,6 +103,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, []);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [budgetIssue, setBudgetIssue] = useState<BudgetIssue | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [authProviders, setAuthProviders] = useState<AuthProviders | null>(null);
@@ -157,6 +162,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setBenchmark(null);
     setSaved([]);
     setExcludedFindings(new Set());
+    setBudgetIssue(null);
     setTask(EXAMPLE_TASK);
     setPage("overview");
   }, []);
@@ -339,6 +345,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     async (req: Omit<BuildRequest, "repository_id">) => {
       setBusy("Selecting context...");
       setError(null);
+      setBudgetIssue(null);
       try {
         const result = await withRepo((id) => api.build({ ...req, repository_id: id }));
         setPkg(result);
@@ -348,7 +355,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         api.health().then(setHealth).catch(() => undefined);
         return result;
       } catch (e) {
-        fail(e);
+        const details = e instanceof ApiError ? (e.details as Partial<BudgetIssue> | undefined) : undefined;
+        if (e instanceof ApiError && e.code === "budget_exceeded" && details?.suggested_budget) {
+          setBudgetIssue({ ...(details as BudgetIssue), message: e.message });
+        } else {
+          fail(e);
+        }
         return null;
       } finally {
         setBusy(null);
@@ -397,12 +409,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       user, authProviders, authChecked, login, signup, logout, startGithubLogin,
       saved, refreshSaved, saveCurrentPackage, openSaved, deleteSaved,
       busy, error, clearError: () => setError(null), notice, clearNotice: () => setNotice(null),
+      budgetIssue, clearBudgetIssue: () => setBudgetIssue(null),
     }),
     [page, apiStatus, wakeAttempt, health, config, benchmarkTasks, connect, indexPath, repo,
      details, indexRepo, task, pkg, buildContext, comparison, runComparison, benchmark,
      runBenchmarks, excludedFindings, toggleFinding, user, authProviders, authChecked, login,
      signup, logout, startGithubLogin, saved, refreshSaved, saveCurrentPackage, openSaved,
-     deleteSaved, busy, error, notice],
+     deleteSaved, busy, error, notice, budgetIssue],
   );
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }

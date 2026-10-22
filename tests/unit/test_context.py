@@ -11,7 +11,12 @@ from app.context.summarizer import (
     python_outline,
     text_excerpt,
 )
-from app.context.token_counter import TokenCounter, get_token_counter, plan_budget
+from app.context.token_counter import (
+    TokenCounter,
+    budget_exceeded_details,
+    get_token_counter,
+    plan_budget,
+)
 from app.core.config import BudgetSettings
 from app.core.exceptions import BudgetExceededError
 from app.core.models import Candidate, RepoFile
@@ -235,8 +240,34 @@ def test_fence_escaping_for_backticks(make_repo, tmp_service):
 
 def test_budget_too_small_rejected(make_repo, tmp_service):
     repo = tmp_service.index_repository(make_repo(MINI_PROJECT))
-    with pytest.raises(BudgetExceededError):
+    with pytest.raises(BudgetExceededError) as exc:
         tmp_service.build_context(
             repo.repository_id,
             BuildOptions(task="token", token_budget=1000, reserved_response_tokens=900),
         )
+    details = exc.value.details
+    assert details["reason"] == "reservations"
+    assert details["available_tokens"] == 0 and details["shortfall_tokens"] > 0
+    assert set(details["reservations"]) == {"system", "task", "response", "safety_margin"}
+    assert details["suggested_budget"] > 1000 and details["suggested_budget"] % 500 == 0
+    assert f"{details['suggested_budget']:,}" in exc.value.message
+    # Retrying with the suggested budget works.
+    pkg = tmp_service.build_context(
+        repo.repository_id,
+        BuildOptions(
+            task="token", token_budget=details["suggested_budget"], reserved_response_tokens=900
+        ),
+    )
+    assert pkg.token_stats.usable_tokens > 0
+
+
+@pytest.mark.parametrize("total, needed", [(1000, 256), (4000, 5000), (8000, 120), (3000, 9000)])
+def test_suggested_budget_always_fits(total, needed):
+    counter = get_token_counter()
+    budget = BudgetSettings(total_tokens=total)
+    plan = plan_budget(budget, "add jwt auth", counter)
+    details = budget_exceeded_details(plan, needed, "required_files")
+    bigger = plan_budget(budget.model_copy(update={"total_tokens": details["suggested_budget"]}),
+                         "add jwt auth", counter)  # fmt: skip
+    assert bigger.usable_tokens >= needed
+    assert details["suggested_budget"] > total

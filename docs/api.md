@@ -27,9 +27,29 @@ Every error uses this shape:
 | 404 | `repository_not_found` | Unknown `repository_id` (index it first; indexes live in memory) |
 | 413 | `request_too_large` | Body exceeds `api_max_request_bytes` (default 1 MB) |
 | 422 | `validation_error` | Request validation failed (`details` lists the fields) |
-| 422 | `budget_exceeded` | Budget too small after reservations, or required files exceed it |
+| 422 | `budget_exceeded` | Budget too small after reservations, or required files exceed it. `details` is a structured report (below) |
 | 504 | `processing_timeout` | Processing exceeded `api_timeout_seconds` (default 60 s) |
 | 500 | `internal_error` | Unexpected error (details are logged server-side, not returned) |
+
+### Budget exceeded
+
+`POST /context/build` (and `/context/compare`, `/context/export` with a build request)
+returns `422 budget_exceeded` when the budget cannot work:
+
+```json
+{"error": {"code": "budget_exceeded",
+  "message": "Token budget is too small after reserving system, task, response and safety margin tokens. Try at least 2,500 tokens.",
+  "details": {"reason": "reservations", "total_budget": 1000, "needed_tokens": 256,
+              "available_tokens": 0, "shortfall_tokens": 256,
+              "reservations": {"system": 400, "task": 31, "response": 1500, "safety_margin": 50},
+              "suggested_budget": 2500}}}
+```
+
+* `reason`: `reservations` (nothing left for context after reserves) or `required_files`
+  (required files do not fit; `details` then also has `rendered_tokens` and
+  `usable_tokens`).
+* `suggested_budget`: the smallest total budget, rounded up to 500, that would fit with the
+  same reserves. Retrying with it succeeds.
 
 ## Endpoints
 
@@ -235,8 +255,10 @@ Requires login when `ACWM_REQUIRE_AUTH` is on.
 
 Runs the 80-turn conversation through `full`, `truncation` and `acwm`. Returns `summary`
 (one row per strategy: tokens, manager tokens and latency, estimated cost, compactions,
-recall), `per_turn` metrics per strategy, and `answers` per strategy. `budget_tokens` is
-1000-16000 (default from `config.yaml`).
+recall, `budget_exceeded_turns`, `over_target_turns`), `per_turn` metrics per strategy
+(including `budget_status` and `budget_exceeded`), `answers` per strategy, and
+`budget_events` per strategy (`{turn, status, message}` for each `over_target` or
+`over_budget` turn). `budget_tokens` is 1000-16000 (default from `config.yaml`).
 
 * `dry-run` (default): mock models, no keys, deterministic and cached. Recall means the
   fact was still in the context.

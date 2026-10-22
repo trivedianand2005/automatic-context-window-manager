@@ -53,16 +53,21 @@ class ManagerLLM:
     def model(self) -> str:
         return self.backend.model
 
-    def build_prompt(self, messages: list[Message], summary: str, facts: list[Fact]) -> str:
+    def build_prompt(
+        self, messages: list[Message], summary: str, facts: list[Fact], current_request: str = ""
+    ) -> str:
         return COMPACTION_PROMPT.format(
             previous_summary=summary or "(none)",
             existing_facts="\n".join(f"- {f.text}" for f in facts) or "(none)",
             messages="\n\n".join(render_message(m.id, m.role, m.turn, m.content) for m in messages),
             summary_words=self.summary_words,
+            current_request=current_request.replace("</current_request>", "") or "(none)",
         )
 
-    def compact(self, messages: list[Message], summary: str, facts: list[Fact]) -> ManagerCall:
-        prompt = self.build_prompt(messages, summary, facts)
+    def compact(
+        self, messages: list[Message], summary: str, facts: list[Fact], current_request: str = ""
+    ) -> ManagerCall:
+        prompt = self.build_prompt(messages, summary, facts, current_request)
         call = ManagerCall(output=None)
         content = prompt
         for attempt in range(self.json_retries + 1):

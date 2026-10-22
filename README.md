@@ -1,13 +1,18 @@
 # ACWM: Automatic Context Window Manager
 
-ACWM selects the repository files and symbols an AI coding agent needs for a task under a
-fixed token budget, and explains every choice. It indexes a local repository and parses
-Python with `ast`. It retrieves candidates with BM25, follows import dependencies through a
-NetworkX graph, and packs the best combination of full files and partial excerpts into a
-validated, exportable context package.
+ACWM keeps what an AI model needs inside a fixed token budget, and says what it dropped
+and why. It has two parts that share one token counter and one budget model:
 
-It runs fully offline. LLM, TinyFish and semantic-search integrations are optional and
-clearly labelled when they are mocked or unavailable.
+* **Repository context selection.** For a coding task, it picks the files and symbols an
+  agent needs, follows their import dependencies, and packs full files and verbatim
+  excerpts into a validated context package.
+* **Conversation manager.** For a long chat, it runs cheap heuristics every turn and calls
+  a small, separate manager model (Claude Haiku or a local Ollama model) only past a
+  threshold, to summarize, score and pin facts so early decisions are not forgotten.
+
+Both report clearly when something does not fit (**budget-exceeded detection**) and
+measure tokens, cost and latency. The core runs fully offline. LLM, TinyFish and
+semantic-search integrations are optional and clearly labelled when mocked or unavailable.
 
 **Live demo** (Render free tier, so the first load after idle takes about a minute):
 
@@ -17,7 +22,7 @@ clearly labelled when they are mocked or unavailable.
 
 To test it yourself, use the two bundled example repositories and the tasks in
 [docs/testing_guide.md](docs/testing_guide.md). LibTrack is a held-out repository that ACWM
-was not tuned on.
+was not tuned on. The **Conversation** page runs the conversation benchmark in one click.
 
 ---
 
@@ -38,19 +43,21 @@ was not tuned on.
 13. [How it works](#how-it-works)
 14. [Benchmarks](#benchmarks)
 15. [Conversation manager (hybrid LLM)](#conversation-manager-hybrid-llm)
-16. [TinyFish configuration](#tinyfish-configuration)
-17. [API endpoints](#api-endpoints)
-18. [Tests](#tests)
-19. [Known limitations](#known-limitations)
-20. [Security notes](#security-notes)
-21. [Future improvements](#future-improvements)
+16. [Budget-exceeded detection and reporting](#budget-exceeded-detection-and-reporting)
+17. [TinyFish configuration](#tinyfish-configuration)
+18. [API endpoints](#api-endpoints)
+19. [Tests](#tests)
+20. [Known limitations](#known-limitations)
+21. [Security notes](#security-notes)
+22. [Future improvements](#future-improvements)
+23. [Deploying to Render](#deploying-to-render)
 
 ---
 
 ## Overview
 
-Given a task such as *"Add JWT authentication to the FastAPI application and create tests
-for protected routes"*, ACWM runs these steps:
+**Repository context.** Given a task such as *"Add JWT authentication to the FastAPI
+application and create tests for protected routes"*, ACWM:
 
 1. Indexes the repository safely, skipping secrets, binaries, virtual environments and
    ignored files.
@@ -58,134 +65,170 @@ for protected routes"*, ACWM runs these steps:
 3. Ranks files with BM25, filename and symbol matches, and dependency-graph propagation,
    plus test and config relevance.
 4. Selects content under a token budget. Large files become verbatim excerpts with line
-   numbers.
+   numbers. If the budget cannot work at all, it says why and suggests the smallest budget
+   that fits.
 5. Exports a Markdown, JSON or TXT package that states what was selected, why, what was
    left out, and the token cost.
 6. Compares the result against a lexical-only baseline at the same budget.
 
+**Conversation context.** For a chat that keeps growing, ACWM:
+
+1. Tracks every message's tokens and metadata each turn, with no LLM call.
+2. At 75% of the budget, sends older messages to a small manager model, which returns
+   validated JSON: a running summary, durable facts, importance scores, superseded
+   messages and the messages the current request still needs word-for-word.
+3. Rebuilds the context from a never-evicted facts block, the summary, the recent turns
+   and the important messages, then evicts the lowest-scored rest down to 50%.
+4. Reports every turn where the context exceeds the budget or cannot reach the target,
+   with the parts responsible.
+5. Logs tokens, estimated cost, manager latency and compactions per turn.
+
 ## Problem statement
 
-Coding agents waste context on irrelevant files, repeated history and tool output. Simple
-filename or keyword search misses the code a change actually touches. For example, the
-route a user mentions depends on an auth dependency, which depends on a service, which
-reads configuration. Meanwhile, keyword search pulls in files that merely share
-vocabulary, such as a *token*-usage billing module during a *JWT token* task. ACWM tries to
-keep the dependency chain and drop the distractors within a fixed budget.
+Context windows fill up, and how they are trimmed decides what the model can still see.
+
+* **Coding agents waste context** on irrelevant files, repeated history and tool output.
+  Keyword search misses the code a change actually touches: the route a user mentions
+  depends on an auth dependency, which depends on a service, which reads configuration.
+  Meanwhile it pulls in files that merely share vocabulary, such as a *token*-usage billing
+  module during a *JWT token* task.
+* **Naive truncation loses important information.** Dropping the oldest messages to fit
+  silently removes the decisions, names and constraints set at the start of a
+  conversation. In ACWM's benchmark, truncation keeps 1 of 11 early facts; ACWM keeps 11.
+* **Long context costs money.** Sending the whole history every turn grows cost with every
+  turn, and eventually overflows the window anyway. Spending a few hundred tokens of a
+  cheap model on compaction saves far more tokens of the expensive one.
+* **Silent failure.** When a budget cannot work, tools often truncate without saying so.
+  ACWM reports it, with numbers.
 
 ## Goals and non-goals
 
 **Goals**
 
 * Deterministic, explainable context selection for Python repositories.
-* Hard budget guarantees. Every package is validated after rendering.
+* Hard budget guarantees. Every package is validated after rendering; budget problems are
+  reported, never hidden.
+* A conversation manager that is cheap by default (heuristics every turn) and uses a small
+  LLM only when it pays off, without ever crashing when that LLM fails.
 * Honest reporting: measured metrics, explicit N/A values, and clear labels on mocked or
   unavailable providers.
-* One shared service layer behind the UI, the API and the scripts.
+* One shared service layer behind the web app, the API and the scripts.
 
 **Non-goals**
 
 * Full program understanding. ACWM sees static imports, not runtime behaviour.
 * Generating code or guaranteeing that a change made from the package is correct.
-* Being a hosted, multi-tenant service.
+* Being a hardened multi-tenant service.
 * Parsing languages other than Python into symbols. Markdown, JSON, YAML, TOML and INI
   files are indexed as text only.
 
 ## Features
 
-**Ingestion**
+### Conversation manager
 
-* Allowed-root enforcement and hierarchical `.gitignore` support.
-* Exclusion of VCS, virtual-environment, cache and build directories.
-* Detection of sensitive filenames and secret-like content.
-* Binary detection, size limits and a symlink-escape guard.
-* A detailed indexing report with a reason for every exclusion.
+* **Hybrid manager.** Heuristics every turn (token counts and per-message metadata: role,
+  turn, timestamp, tokens, pinned, required, score). The manager LLM runs only past
+  `compact_threshold` (75%), with a cooldown and a threshold-to-target gap (75% → 50%) so it
+  does not fire every turn.
+* **Small, cheap manager model, separate from the main model.** Claude Haiku
+  (`claude-haiku-5-5`) or a local Ollama model (`qwen2.5:7b`) manages context; the main
+  model (`claude-opus-5-5`) only answers. All models, backends, thresholds and prices are in
+  [config.yaml](config.yaml).
+* **Structured JSON output.** The manager returns `summary`, `pinned_facts`,
+  `message_scores` (1-5 with reasons), `superseded` and `required_for_task`, validated
+  against a pydantic schema (also sent as a JSON-schema structured output). An invalid
+  reply gets one error-correction retry, then a heuristic fallback.
+* **Pinned facts and required messages.** Facts are merged and deduplicated (newer wins per
+  `topic:`) and never evicted. Messages the current request needs verbatim
+  (`required_for_task`) are kept and never evicted.
+* **Budget-exceeded detection and reporting.** Every context window carries a budget report:
+  `over_target` when compaction cannot reach the target, `over_budget` when the window
+  exceeds the budget, each naming the biggest protected parts and what to change.
+* **Graceful failure.** Timeouts, API errors, refusals and invalid JSON fall back to
+  heuristics; a manager failure never breaks a turn.
+* **Metrics.** Per turn: tokens sent to the main model, manager tokens, manager latency,
+  estimated cost, whether compaction fired and the budget status.
+* **Benchmark.** The same 80-turn conversation through no management, naive truncation and
+  ACWM, with recall questions on early facts. CSV/JSON results and charts, in the web app or
+  from the command line, with a no-keys dry run.
 
-**Parsing**
+### Repository context selection
 
-* Functions, async functions, classes, methods, nested definitions, signatures,
-  docstrings, decorators and line ranges.
-* Stable symbol IDs (`path::Qualified.name`).
-* Syntax errors are tolerated and reported.
+* **Ingestion:** allowed-root enforcement, hierarchical `.gitignore`, exclusion of VCS,
+  virtual-environment, cache and build directories, secret detection, binary detection,
+  size limits, a symlink-escape guard and an indexing report with a reason per exclusion.
+* **Parsing:** functions, async functions, classes, methods, nested definitions, signatures,
+  docstrings, decorators and line ranges, with stable symbol IDs (`path::Qualified.name`).
+  Syntax errors are tolerated and reported.
+* **Imports:** absolute, relative, conditional and `TYPE_CHECKING` imports with confidence
+  labels. External and ambiguous imports are classified, never invented.
+* **Retrieval and graph:** BM25 file and symbol indexes, a hybrid ranker with normalised,
+  configurable weights and per-signal breakdowns, and a NetworkX graph with `imports`,
+  `contains`, `tests`, `references` and `configured` edges. Expansion is relationship-aware
+  and cycle-safe.
+* **Token budgeting:** tiktoken with an explicit encoding (labelled heuristic fallback),
+  reserves for the system prompt, task, response and a safety margin, and utilization and
+  reduction figures.
+* **Budget-exceeded reporting:** when the reserves leave nothing for context, or required
+  files do not fit, the API returns a structured report (reserves, needed, available,
+  shortfall, suggested budget) and the web app offers a one-click rebuild with the
+  suggested budget.
+* **Optimizer and compression:** a core set placed by relevance with fair-share excerpting
+  when tight, a density-greedy tail with dependency bonus and redundancy penalties,
+  required-file handling and final validation. Extractive excerpts by default; optional
+  labelled LLM summaries.
+* **Outputs:** Markdown, JSON (schema-validated) and TXT export, and a baseline vs
+  dependency-expansion vs ACWM comparison with Precision@K, Recall@K, MRR, coverage,
+  utilization, budget violations and latency.
 
-**Imports**
+### Interfaces, accounts and integrations
 
-* Absolute, relative, conditional and `TYPE_CHECKING` imports, each with a confidence
-  label.
-* External and ambiguous imports are classified, never invented.
-
-**Retrieval and graph**
-
-* BM25 file and symbol indexes, with matching terms and symbols reported per hit.
-* A hybrid ranker with normalised, configurable weights and per-signal breakdowns.
-* A NetworkX graph with `imports`, `contains`, `tests`, `references` and `configured`
-  edges. Expansion is relationship-aware and cycle-safe, and the UI renders it with
-  Graphviz.
-
-**Token budgeting**
-
-* tiktoken with an explicit encoding, plus a labelled heuristic fallback.
-* Reserves for the system prompt, task, response and a safety margin.
-* Utilization, remaining tokens, and reduction relative to the repository and the baseline.
-
-**Optimizer and compression**
-
-* A core set placed by relevance, with fair-share excerpting when the budget is tight.
-* A density-greedy tail with dependency bonus and redundancy penalties.
-* Required-file handling and final validation.
-* Mode A, extractive: verbatim lines, signature outlines, line markers.
-* Mode B, optional LLM summaries: labelled, budget-checked, with a fallback.
-
-**Outputs**
-
-* Markdown, JSON (schema-validated) and TXT export, previewable in the UI.
-* Baseline, dependency-expansion and ACWM comparison with Precision@K, Recall@K, MRR,
-  coverage, utilization, budget violations and latency.
-
-**Interfaces and integrations**
-
-* A Streamlit UI with eight tabs: Dashboard, Repository Explorer, Context Builder,
-  Results, Comparison, Export, Benchmarks and Settings.
-* A FastAPI backend with OpenAPI docs, structured errors, a size limit and timeouts.
-* An optional TinyFish Search API adapter with an offline mock, and an optional Anthropic
-  LLM provider.
-
-### Accounts and saved packages
-
-* **Sign up / log in** with email and password, or **Continue with GitHub** (OAuth with
-  `state` and PKCE). Every visitor must log in before using the hosted web app.
-* **Private workspace per account.** Indexed repositories and run history are isolated per
-  user on the server.
-* **Saved context packages.** Press *Save to my account* on the Results page. Saved
-  packages live in PostgreSQL and can be opened, downloaded or deleted later from the
-  **Saved packages** page. Other users can never see them.
-* Passwords are stored only as salted scrypt hashes. Login returns a signed JWT that expires
+* **React web app** (`frontend/`): Overview, Repository, Build context, Results, Compare,
+  Benchmarks, **Conversation**, Export and Saved packages pages.
+* **FastAPI backend** with OpenAPI docs, structured errors, a size limit and timeouts; the
+  original Streamlit UI is kept as a backup.
+* **Accounts:** email and password or **Continue with GitHub** (OAuth with `state` and
+  PKCE); a private workspace per account; saved context packages in PostgreSQL that only
+  their owner can see. Passwords are salted scrypt hashes; login returns a JWT that expires
   after 7 days.
+* **Optional integrations:** TinyFish Search API (with an offline mock), an Anthropic LLM
+  provider for task analysis and summaries, and a semantic-search signal.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
+    WEB[React web app] --> API[FastAPI]
     UI[Streamlit UI] --> S[ACWMService]
-    API[FastAPI] --> S
+    API --> S
     CLI[demo / benchmark scripts] --> S
-    S --> SEC[security: allowed roots, secrets]
-    SEC --> SCAN[scanner + filters]
-    SCAN --> AST[AST parser + symbols]
-    AST --> IMP[import resolver]
-    IMP --> G[(NetworkX dependency graph)]
-    AST --> BM[BM25 file + symbol index]
-    S --> TA[task analyzer]
-    TA --> HR[hybrid ranker]
-    BM --> HR
-    G --> EX[graph expansion] --> HR
-    HR --> OPT[budget optimizer] --> CMP[extractive / LLM compression]
-    CMP --> PKG[context builder + validation] --> OUT[Markdown / JSON / TXT]
+    subgraph Repository context
+      S --> SEC[security: allowed roots, secrets]
+      SEC --> SCAN[scanner + filters]
+      SCAN --> AST[AST parser + symbols]
+      AST --> IMP[import resolver]
+      IMP --> G[(NetworkX dependency graph)]
+      AST --> BM[BM25 file + symbol index]
+      S --> TA[task analyzer]
+      TA --> HR[hybrid ranker]
+      BM --> HR
+      G --> EX[graph expansion] --> HR
+      HR --> OPT[budget optimizer] --> CMP[extractive / LLM compression]
+      CMP --> PKG[context builder + validation] --> OUT[Markdown / JSON / TXT]
+      OPT -. budget exceeded .-> BE[structured report + suggested budget]
+    end
+    subgraph Conversation context
+      API --> CM[ConversationManager]
+      CM --> MGR[manager LLM: Haiku / Ollama]
+      CM --> BR[budget report + metrics]
+    end
     S -.optional.-> LLM[Anthropic LLM]
     S -.optional.-> TF[TinyFish Search / mock]
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the full data flow, the scoring
-formula and the optimizer details.
+formula and the optimizer details, and the
+[conversation manager section](#conversation-manager-hybrid-llm) for its own diagram.
 
 ## Technology stack
 
@@ -228,6 +271,7 @@ app/
   integrations/              llm_provider.py, tinyfish_client.py, mock_web_research.py
   storage/                   index_store.py, session_store.py
   utils/                     security.py, file_hashing.py
+frontend/                              React + TypeScript web app (Vite, Tailwind, Recharts)
 benchmarks/sample_fastapi_tasks.json   labelled benchmark tasks
 examples/sample_fastapi_repo/          demo FastAPI service (package `shopapi`)
 scripts/run_demo.py, scripts/evaluate_benchmarks.py, scripts/conversation_benchmark.py
@@ -349,7 +393,10 @@ The demo runs offline in about 5 minutes and needs no keys.
    6. **Benchmarks:** click *Run benchmarks*. All numbers are measured live.
 3. In the web app, open **Conversation** and click *Run benchmark*. Show the context-size
    chart (no management overflows, truncation sits at the budget, ACWM drops at each
-   manager compaction), the compaction events table and the recall questions.
+   manager compaction), the compaction events table, the budget events and the recall
+   questions.
+   Then open **Build context**, set the budget to 1000 and build: the *Budget exceeded*
+   panel explains the shortfall, and *Use N tokens and rebuild* fixes it in one click.
 4. Optionally, open `http://127.0.0.1:8000/docs` and try `POST /context/compare`.
 5. Be candid about limitations: the static-import view, a small benchmark built by the
    same author, tiktoken estimates, and that the conversation dry run measures fact
@@ -467,6 +514,10 @@ def auth_headers(client, demo_user):
 5. Re-render and count. Trim the lowest-value items if formatting pushed the package over
    budget, or fail if required items alone exceed it.
 
+If step 1 leaves nothing usable, or step 5 fails, the build returns a structured
+budget-exceeded report with a suggested budget; see
+[Budget-exceeded detection and reporting](#budget-exceeded-detection-and-reporting).
+
 The per-file cap is 40% of the usable budget, which keeps one large file from consuming
 everything. See [docs/architecture.md](docs/architecture.md#budget-optimizer) for
 complexity and limitations.
@@ -518,21 +569,22 @@ facts from early in the conversation.
 ```mermaid
 flowchart LR
     U[User message] --> CM[ConversationManager]
-    CM -->|every turn, no LLM| H[Token count + per-message metadata<br/>role, turn, tokens, pinned, score]
+    CM -->|every turn, no LLM| H[Token count + per-message metadata<br/>role, turn, tokens, pinned, required, score]
     H --> T{usage >= 75%<br/>and cooldown over?}
     T -- no --> W[Context window]
     T -- yes --> ML[Manager LLM<br/>Haiku or Ollama]
-    ML -->|JSON: summary, pinned_facts,<br/>message_scores, superseded| V{Valid?}
+    ML -->|JSON: summary, pinned_facts, message_scores,<br/>superseded, required_for_task| V{Valid?}
     V -- no --> R[Retry once with<br/>error-correction prompt]
     R --> V2{Valid?}
     V2 -- no --> HF[Heuristic fallback]
-    V -- yes --> AP[Apply: facts block + summary<br/>+ high-scoring messages]
+    V -- yes --> AP[Apply: facts block + summary<br/>+ required + high-scoring messages]
     V2 -- yes --> AP
     HF --> AP
     AP --> EV[Evict lowest score, oldest first,<br/>until usage <= 50%]
-    EV --> W
+    EV --> BR[Budget report<br/>ok / over_target / over_budget]
+    BR --> W
     W --> MM[Main model<br/>Opus, answers the user]
-    MM --> M[(Per-turn metrics:<br/>tokens, cost, latency, compaction)]
+    MM --> M[(Per-turn metrics:<br/>tokens, cost, latency, compaction, budget)]
 ```
 
 Two models, kept separate:
@@ -545,33 +597,41 @@ Two models, kept separate:
 ### How the hybrid manager works
 
 1. **Every turn (cheap):** each message is stored with its role, turn index, timestamp,
-   token count (tiktoken), pinned flag and score. Usage = system block + messages.
+   token count (tiktoken), pinned and required flags, and score. Usage = system block +
+   messages.
 2. **Trigger:** when usage reaches `compact_threshold` (75% of `total_tokens`) and at least
    `cooldown_turns` have passed since the last compaction, the manager LLM runs.
-3. **Compaction:** the system prompt, the last `keep_recent_turns` turns and pinned messages
-   stay verbatim. Older messages go to the manager, which returns JSON:
+3. **Compaction:** the system prompt, the last `keep_recent_turns` turns, pinned messages
+   and required messages stay verbatim. Older messages go to the manager together with
+   the current request, and it returns JSON:
 
    ```json
    {
      "summary": "running summary of the compacted messages",
      "pinned_facts": ["deadline: public beta on November 14", "database: switched to SQLite"],
      "message_scores": [{"id": "m12", "score": 4, "reason": "exact API contract"}],
-     "superseded": ["m9"]
+     "superseded": ["m9"],
+     "required_for_task": ["m14"]
    }
    ```
 
    They are replaced by a **pinned-facts block** (never evicted), the **running summary**,
-   and any message scored `>= verbatim_min_score` that was not superseded. New facts are
-   merged with existing ones: duplicates are dropped and, for the same `topic:`, the newer
-   fact wins.
+   the **required messages** (`required_for_task`: exact code, specs or errors the current
+   request needs; kept verbatim and never evicted) and any message scored
+   `>= verbatim_min_score`. Superseded messages are dropped even if scored high or marked
+   required. New facts are merged with existing ones: duplicates are dropped and, for the
+   same `topic:`, the newer fact wins.
 4. **Target:** if usage is still above `compact_target` (50%), the lowest-scored old
-   messages are evicted, oldest first among equal scores.
+   messages are evicted, oldest first among equal scores. If protected content alone is
+   above the target, the turn is reported as `over_target` (see
+   [Budget-exceeded detection](#budget-exceeded-detection-and-reporting)).
 5. **Hysteresis:** the 75% to 50% gap leaves room for several turns before the next trigger,
    and the cooldown stops back-to-back calls when recent turns alone keep usage high. If the
    context would overflow during a cooldown, a heuristic-only compaction runs (no LLM).
 6. **Never crashes:** a timeout, API error, refusal or invalid JSON (after one retry with an
    error-correction prompt) logs a warning and falls back to heuristics: extractive facts,
-   rule-based scores and an extractive summary.
+   rule-based scores, an extractive summary, and code blocks that share terms with the
+   current request as `required_for_task`.
 
 The output schema is the `ManagerOutput` pydantic model in
 [app/conversation/models.py](app/conversation/models.py). The Anthropic backend also sends
@@ -623,8 +683,8 @@ To run the manager locally with no API costs: `ollama pull qwen2.5:7b`, then set
 
 `ConversationManager.record_turn` logs one line per turn and keeps a `TurnMetrics` row
 with: tokens sent to the main model, main-model input/output tokens, manager tokens,
-manager latency, estimated cost (prices from `config.yaml`), and whether compaction fired
-(`llm` or `heuristic`).
+manager latency, estimated cost (prices from `config.yaml`), whether compaction fired
+(`llm` or `heuristic`), and the budget status (`budget_status`, `budget_exceeded`).
 
 ### In the web app
 
@@ -635,7 +695,10 @@ The **Conversation** page runs the benchmark on the server and shows:
 * context size per turn for all three strategies, with each manager compaction and the
   no-management overflow marked;
 * estimated cost (main model vs manager) and recall per strategy;
-* every compaction event (turn, mode, context after, manager tokens, latency, cost);
+* every compaction event (turn, mode, context after, manager tokens, latency, cost,
+  budget status);
+* budget events: each turn where a strategy exceeded the budget or missed the target,
+  with the explanation;
 * each recall question, with a tick or cross per strategy.
 
 Dry run is the default and needs no keys. **Live** mode calls the configured models and
@@ -686,17 +749,78 @@ How to read the numbers:
 
 Dry run, measured on 2026-10-22 (budget 4000 tokens, 80 turns, prices from `config.yaml`):
 
-| Strategy | Turns completed | Total tokens | Manager tokens | Est. cost | Facts retained |
-|---|---|---|---|---|---|
-| No management | 44 (overflow at turn 45) | 83,281 | 0 | $0.3784 | 0/11 |
-| Naive truncation | 80 | 228,223 | 0 | $0.9915 | 1/11 |
-| ACWM + manager | 80 | 173,683 | 15,380 | $0.7150 | 11/11 |
+| Strategy | Turns completed | Total tokens | Manager tokens | Est. cost | Budget exceeded | Facts retained |
+|---|---|---|---|---|---|---|
+| No management | 44 (overflow at turn 45) | 83,281 | 0 | $0.3784 | 1 turn (then stops) | 0/11 |
+| Naive truncation | 80 | 228,223 | 0 | $0.9915 | never | 1/11 |
+| ACWM + manager | 80 | 174,038 | 15,735 | $0.7150 | never | 11/11 |
 
 <!-- Paste the live-run charts here:
 ![Context size per turn](docs/images/tokens_per_turn.png)
 ![Total cost](docs/images/cost_comparison.png)
 ![Recall accuracy](docs/images/recall_accuracy.png)
 -->
+
+## Budget-exceeded detection and reporting
+
+ACWM never silently truncates past a budget. Both halves detect when something cannot fit
+and report what is taking the space.
+
+### Repository context (`POST /context/build`)
+
+A build fails with `422 budget_exceeded` in two cases:
+
+| `reason` | When |
+|---|---|
+| `reservations` | The system, task, response and safety-margin reserves leave nothing for repository context. |
+| `required_files` | The files you marked as required do not fit in the usable budget, even as excerpts. |
+
+The error carries a structured report:
+
+```json
+{"error": {"code": "budget_exceeded",
+  "message": "Token budget is too small after reserving system, task, response and safety margin tokens. Try at least 2,500 tokens.",
+  "details": {"reason": "reservations", "total_budget": 1000, "needed_tokens": 256,
+              "available_tokens": 0, "shortfall_tokens": 256,
+              "reservations": {"system": 400, "task": 31, "response": 1500, "safety_margin": 50},
+              "suggested_budget": 2500}}}
+```
+
+`suggested_budget` is the smallest budget (rounded up to 500) whose usable space covers
+what is needed, accounting for the safety margin growing with the total. On the **Build
+context** page this appears as a *Budget exceeded* panel showing how the budget was split
+and how much was missing, with a **Use N tokens and rebuild** button.
+
+Separately, Compare and Benchmarks report a `budget_violation` per method if a rendered
+package ever exceeded its usable budget (it should always be 0).
+
+### Conversation context (`ConversationManager`)
+
+Every `ContextWindow` returned by `prepare()` carries a `BudgetReport`:
+
+| `status` | Meaning |
+|---|---|
+| `ok` | The window fits. |
+| `over_target` | A compaction ran but could not reach `compact_target`, because protected content is too large. |
+| `over_budget` | The window sent to the main model exceeds `total_tokens`. |
+
+Protected content is what compaction may not remove: the system prompt, pinned facts, the
+summary, the last `keep_recent_turns` turns, pinned messages and `required_for_task`
+messages. The report includes a per-part `breakdown` and a message naming the biggest
+parts and what to change, for example (illustrative numbers):
+
+> Compaction could not reach the 50% target (2,000 tokens): the context is still 2,310
+> tokens because protected content is 2,280 tokens (recent turns 1,940, pinned facts 220,
+> system prompt 120). Raise context.total_tokens, lower context.keep_recent_turns, or
+> unpin messages.
+
+Each turn's `TurnMetrics` records `budget_status` and `budget_exceeded`, and a warning is
+logged. The benchmark summary counts `budget_exceeded_turns` and `over_target_turns` per
+strategy, and `budget_events` lists each event. The Conversation page shows them in the
+summary table, on each compaction event, and in a *Budget events* list.
+
+In the benchmark, no management exceeds the budget at turn 45 and stops; naive truncation
+and ACWM never exceed it.
 
 ## TinyFish configuration
 
@@ -734,8 +858,10 @@ Details and the documentation check date are in
 | GET | `/conversation/status` | Manager and main model in use, live-run availability, context settings |
 | POST | `/conversation/benchmark` | Run the conversation benchmark (dry-run or live) |
 
-Request and response formats are in [docs/api.md](docs/api.md), and the interactive docs
-are at `/docs`.
+Errors use one shape, `{"error": {"code", "message", "details"}}`. A build that cannot
+fit returns `422 budget_exceeded` with a structured report in `details`. Request and
+response formats are in [docs/api.md](docs/api.md), and the interactive docs are at
+`/docs`.
 
 ## Tests
 
@@ -753,12 +879,16 @@ The suite covers:
 * graph construction and expansion;
 * BM25, hybrid ranking and token counting;
 * the optimizer, including overflow, required files and redundancy;
+* budget-exceeded reports: structured details, a suggested budget that always fits, and
+  a rebuild with it (service, API, web app panel and Playwright);
 * extractive compression and package assembly;
 * Markdown, JSON (schema) and TXT export;
 * metrics, baseline comparison and benchmarks;
 * TinyFish (mocked HTTP), the LLM provider (mocked) and fallbacks;
 * the conversation manager with a mocked manager LLM: threshold trigger and cooldown,
   JSON validation, retry and heuristic fallback, pinned-fact merging, eviction order,
+  `required_for_task` (kept, never evicted, superseded wins, heuristic fallback),
+  budget reports (`ok`, `over_target`, `over_budget`),
   backends (Ollama via mocked HTTP), a dry-run benchmark, the `/conversation` endpoints
   and the Conversation page (unit test and Playwright);
 * every API endpoint, with valid and invalid requests;
@@ -791,6 +921,11 @@ The suite covers:
   accounts or saved packages.
 * **Unverified LLM integration.** The Anthropic adapter has only been tested against mocks.
   TinyFish was verified live on 2026-10-18.
+* **Required messages persist.** A message marked `required_for_task` stays verbatim until
+  the conversation ends, like a pinned message; it is not re-evaluated in later
+  compactions.
+* **Suggested budgets assume the same reserves.** Changing the reserved response size or
+  the task text changes the minimum.
 * **No downstream guarantee.** A good context package does not guarantee a correct code
   change.
 

@@ -28,6 +28,10 @@ Compress the older messages below.
 {messages}
 </messages>
 
+<current_request>
+{current_request}
+</current_request>
+
 Return a JSON object with exactly these keys:
 
 - "summary": an updated running summary that merges <previous_summary> with the new
@@ -44,6 +48,10 @@ Return a JSON object with exactly these keys:
   4 = important detail not captured by the summary or facts, 3 = useful context,
   2 = routine, 1 = filler.
 - "superseded": ids of messages whose information was replaced by a newer message.
+- "required_for_task": ids of messages above that the task in <current_request> (or the
+  work still in progress) needs word-for-word: exact code, specifications, error output or
+  instructions being worked on. These are kept verbatim and never evicted, so list only
+  what is truly needed; usually none or one or two ids.
 """
 
 REPAIR_PROMPT = """\
@@ -56,8 +64,8 @@ Your previous reply could not be used: {error}
 </previous_reply>
 
 Return only the corrected JSON object with the keys "summary", "pinned_facts",
-"message_scores" (each with "id", integer "score" from 1 to 5, and "reason") and
-"superseded". No prose and no code fences."""
+"message_scores" (each with "id", integer "score" from 1 to 5, and "reason"),
+"superseded" and "required_for_task". No prose and no code fences."""
 
 JUDGE_SYSTEM = (
     "You grade answers for a benchmark. Reply with a single JSON object and nothing else."

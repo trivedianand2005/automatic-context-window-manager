@@ -6,11 +6,18 @@ Past a threshold (default 75% of the budget) the manager LLM compacts the contex
 
 1. The system prompt and the most recent N turns stay verbatim; pinned messages too.
 2. Older, unpinned messages go to the manager LLM, which returns a running summary,
-   pinned facts, per-message scores (1-5) and superseded message ids.
-3. They are replaced by a pinned-facts block (never evicted), the running summary and
-   any messages scored >= ``verbatim_min_score`` (minus superseded ones).
+   pinned facts, per-message scores (1-5), superseded message ids and the ids the current
+   request still needs word-for-word (``required_for_task``).
+3. They are replaced by a pinned-facts block (never evicted), the running summary, the
+   required messages (never evicted) and any messages scored >= ``verbatim_min_score``
+   (minus superseded ones).
 4. If usage is still above the target (default 50%), the lowest-scored old messages are
    evicted (ties: oldest first).
+
+Budget reporting: every window carries a ``BudgetReport``. ``over_target`` means a
+compaction could not reach the target because protected content (system prompt, facts,
+summary, recent turns, pinned and required messages) is too large; ``over_budget`` means
+the window sent to the main model exceeds the budget. Both name the biggest contributors.
 
 Hysteresis: the gap between threshold and target leaves room for several turns before
 the next trigger, and ``cooldown_turns`` stops back-to-back manager calls when the recent
@@ -32,6 +39,7 @@ from app.conversation.facts import merge_facts
 from app.conversation.heuristics import cap_summary, heuristic_output, score_message
 from app.conversation.manager_llm import ManagerLLM
 from app.conversation.models import (
+    BudgetReport,
     CompactionReport,
     Fact,
     Message,
@@ -43,6 +51,16 @@ from app.core.logging_config import get_logger
 
 log = get_logger("conversation.manager")
 LEADING_USER_PLACEHOLDER = "(Earlier messages are summarized in the system prompt.)"
+BREAKDOWN_LABELS = {
+    "system_prompt": "system prompt",
+    "pinned_facts": "pinned facts",
+    "summary": "summary",
+    "recent_turns": "recent turns",
+    "pinned_messages": "pinned messages",
+    "required_messages": "required messages",
+    "older_messages": "older messages",
+}
+PROTECTED_PARTS = tuple(k for k in BREAKDOWN_LABELS if k != "older_messages")
 
 
 @dataclass
@@ -53,6 +71,7 @@ class ContextWindow:
     messages: list[dict]
     tokens: int
     usage_ratio: float
+    budget: BudgetReport
 
 
 class ConversationManager:
@@ -141,9 +160,12 @@ class ConversationManager:
         elif self.usage_ratio() > 1.0:
             log.info("Context over budget during cooldown; heuristic compaction (no LLM).")
             report = self.compact(use_llm=False)
-        return self.window(), report
+        window = self.window(compacted=report is not None)
+        if window.budget.status != "ok":
+            log.warning("Turn %d: %s", self.turn, window.budget.message)
+        return window, report
 
-    def window(self) -> ContextWindow:
+    def window(self, compacted: bool = False) -> ContextWindow:
         msgs = [{"role": m.role, "content": m.content} for m in self.messages]
         if msgs and msgs[0]["role"] != "user":
             msgs.insert(0, {"role": "user", "content": LEADING_USER_PLACEHOLDER})
@@ -152,7 +174,67 @@ class ConversationManager:
             messages=msgs,
             tokens=self.usage_tokens(),
             usage_ratio=self.usage_ratio(),
+            budget=self.budget_report(compacted),
         )
+
+    # --- budget-exceeded detection -----------------------------------------------------
+
+    def budget_breakdown(self) -> dict[str, int]:
+        """Tokens per part of the window. Every part except ``older_messages`` is protected."""
+        overhead = self.settings.per_message_overhead_tokens
+        floor = self._recent_floor()
+        parts = dict.fromkeys(BREAKDOWN_LABELS, 0)
+        parts["system_prompt"] = self._system_prompt_tokens
+        if self.facts:
+            parts["pinned_facts"] = self.counter.count("\n".join(f"- {f.text}" for f in self.facts))
+        if self.summary:
+            parts["summary"] = self.counter.count(self.summary)
+        for m in self.messages:
+            key = (
+                "pinned_messages"
+                if m.pinned
+                else "required_messages"
+                if m.required
+                else "recent_turns"
+                if m.turn >= floor
+                else "older_messages"
+            )
+            parts[key] += m.tokens + overhead
+        return parts
+
+    def budget_report(self, compacted: bool = False) -> BudgetReport:
+        s = self.settings
+        tokens = self.usage_tokens()
+        target = int(s.compact_target * s.total_tokens)
+        parts = self.budget_breakdown()
+        protected = sum(parts[k] for k in PROTECTED_PARTS)
+        report = BudgetReport(
+            tokens=tokens,
+            total_tokens=s.total_tokens,
+            target_tokens=target,
+            protected_tokens=protected,
+            breakdown=parts,
+        )
+        top = sorted(
+            ((parts[k], BREAKDOWN_LABELS[k]) for k in PROTECTED_PARTS if parts[k]), reverse=True
+        )[:3]
+        biggest = ", ".join(f"{label} {n:,}" for n, label in top)
+        advice = "Raise context.total_tokens, lower context.keep_recent_turns, or unpin messages."
+        if tokens > s.total_tokens:
+            report.status = "over_budget"
+            report.message = (
+                f"Budget exceeded: the context is {tokens:,} tokens but the budget is "
+                f"{s.total_tokens:,}. Protected content alone is {protected:,} tokens "
+                f"({biggest}). {advice}"
+            )
+        elif compacted and tokens > target:
+            report.status = "over_target"
+            report.message = (
+                f"Compaction could not reach the {s.compact_target:.0%} target "
+                f"({target:,} tokens): the context is still {tokens:,} tokens because protected "
+                f"content is {protected:,} tokens ({biggest}). {advice}"
+            )
+        return report
 
     # --- past the threshold: compaction ------------------------------------------------
 
@@ -162,7 +244,10 @@ class ConversationManager:
 
     def _compactable(self) -> list[Message]:
         floor = self._recent_floor()
-        return [m for m in self.messages if not m.pinned and m.turn < floor]
+        return [m for m in self.messages if not (m.pinned or m.required) and m.turn < floor]
+
+    def _current_request(self) -> str:
+        return next((m.content for m in reversed(self.messages) if m.role == "user"), "")
 
     def compact(self, use_llm: bool = True) -> CompactionReport:
         s = self.settings
@@ -177,8 +262,9 @@ class ConversationManager:
         if not old:
             report.evicted_ids = self._evict_until(s.compact_target)
             report.tokens_after = self.usage_tokens()
+            report.target_reached = self.usage_ratio() <= s.compact_target
             if not report.evicted_ids:
-                report.error = "nothing to compact (only recent or pinned messages)"
+                report.error = "nothing to compact (only recent, pinned or required messages)"
                 log.warning("Compaction skipped at turn %d: %s.", self.turn, report.error)
             self.reports.append(report)
             return report
@@ -192,8 +278,9 @@ class ConversationManager:
             batch_tokens += msg.tokens
 
         output = None
+        current = self._current_request()
         if use_llm and self.manager is not None:
-            call = self.manager.compact(batch, self.summary, self.facts)
+            call = self.manager.compact(batch, self.summary, self.facts, current)
             output = call.output
             report.error = call.error
             report.manager_calls = len(call.results)
@@ -206,7 +293,9 @@ class ConversationManager:
         if output is not None:
             report.mode = "llm"
         else:
-            output = heuristic_output(batch, self.summary, self.counter, s.max_summary_tokens)
+            output = heuristic_output(
+                batch, self.summary, self.counter, s.max_summary_tokens, current
+            )
 
         ids = {m.id for m in batch}
         scores = {sc.id: sc.score for sc in output.message_scores if sc.id in ids}
@@ -214,10 +303,13 @@ class ConversationManager:
         if unknown:
             log.warning("Manager scored unknown message ids %s; ignored.", sorted(unknown))
         superseded = set(output.superseded) & ids
+        # Superseded wins: a message replaced by newer information is not needed verbatim.
+        required = (set(output.required_for_task) & ids) - superseded
         keep: set[str] = set()
         for msg in batch:
             msg.score = scores.get(msg.id) or score_message(msg)
-            if msg.id not in superseded and msg.score >= s.verbatim_min_score:
+            msg.required = msg.id in required
+            if msg.required or (msg.id not in superseded and msg.score >= s.verbatim_min_score):
                 keep.add(msg.id)
 
         self.messages = [m for m in self.messages if m.id not in ids or m.id in keep]
@@ -225,8 +317,10 @@ class ConversationManager:
         self.facts = merge_facts(self.facts, output.pinned_facts, self.turn)
         report.summarized_ids = sorted(ids - keep, key=lambda i: int(i[1:]))
         report.kept_verbatim_ids = sorted(keep, key=lambda i: int(i[1:]))
+        report.required_ids = sorted(required, key=lambda i: int(i[1:]))
         report.evicted_ids = self._evict_until(s.compact_target)
         report.tokens_after = self.usage_tokens()
+        report.target_reached = self.usage_ratio() <= s.compact_target
         self.reports.append(report)
         log.info(
             "Compaction turn %d (%s): %d -> %d tokens, %d summarized, %d kept, %d evicted.",
@@ -241,7 +335,10 @@ class ConversationManager:
         return report
 
     def eviction_order(self) -> list[Message]:
-        """Old, unpinned messages from first to last evicted: lowest score, then oldest."""
+        """Old, unpinned, not-required messages from first to last evicted.
+
+        Lowest score first, then oldest.
+        """
         candidates = self._compactable()
         return sorted(
             candidates,
@@ -255,13 +352,6 @@ class ConversationManager:
                 break
             self.messages.remove(msg)
             evicted.append(msg.id)
-        if self.usage_ratio() > target_ratio:
-            log.warning(
-                "Usage %.0f%% still above target %.0f%%: recent turns, pinned messages and "
-                "facts alone exceed it.",
-                self.usage_ratio() * 100,
-                target_ratio * 100,
-            )
         return evicted
 
     # --- instrumentation ---------------------------------------------------------------
@@ -284,6 +374,8 @@ class ConversationManager:
             main_input_tokens=input_tokens,
             main_output_tokens=main_output_tokens,
             main_cost_usd=self.prices.cost(main_model, input_tokens, main_output_tokens),
+            budget_status=window.budget.status,
+            budget_exceeded=window.budget.exceeded,
         )
         if report is not None:
             m.compaction = report.mode
@@ -295,7 +387,7 @@ class ConversationManager:
         self.metrics.append(m)
         log.info(
             "turn=%d ctx_tokens=%d usage=%.0f%% main_in=%d main_out=%d manager_in=%d "
-            "manager_out=%d manager_ms=%.0f cost=$%.5f compaction=%s",
+            "manager_out=%d manager_ms=%.0f cost=$%.5f compaction=%s budget=%s",
             m.turn,
             m.context_tokens,
             m.usage_ratio * 100,
@@ -306,6 +398,7 @@ class ConversationManager:
             m.manager_latency_ms,
             m.total_cost_usd,
             m.compaction or "-",
+            m.budget_status,
         )
         return m
 

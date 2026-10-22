@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased: budget-exceeded detection and required_for_task
+
+### Added
+
+- **Budget-exceeded reports for builds.** `422 budget_exceeded` now carries a structured
+  report (`reason`, reserves, needed, available, shortfall, `suggested_budget`). The Build
+  context page shows a *Budget exceeded* panel with a one-click rebuild at the suggested
+  budget.
+- **Budget reporting in the conversation manager.** Every window carries a `BudgetReport`
+  (`ok` / `over_target` / `over_budget`, per-part breakdown, explanation). `TurnMetrics`
+  records `budget_status` and `budget_exceeded`; the benchmark reports
+  `budget_exceeded_turns`, `over_target_turns` and `budget_events`; the Conversation page
+  shows them in the summary, on compaction events and in a *Budget events* list.
+- **`required_for_task`** in the manager's JSON schema: messages the current request needs
+  word-for-word are kept verbatim and never evicted (superseded still wins). The manager
+  now sees the current request; the heuristic fallback marks code blocks that share terms
+  with it.
+- Tests for all of the above (unit, API, frontend and Playwright).
+
+### Changed
+
+- README rewritten: overview, problem statement, complete features list, updated
+  architecture diagram, a new budget-exceeded section and refreshed benchmark results.
+  `docs/api.md` and `docs/architecture.md` updated to match.
+
 ## Unreleased: conversation manager in the web app
 
 ### Added

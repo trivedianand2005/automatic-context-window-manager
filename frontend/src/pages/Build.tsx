@@ -1,5 +1,6 @@
 import { ChevronDown, RotateCcw, Wand2 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { BudgetExceededPanel } from "../components/BudgetExceededPanel";
 import { Card, PageHeader } from "../components/ui";
 import { useStore } from "../lib/store";
 import type { Compression, Mode, Weights } from "../lib/types";
@@ -32,7 +33,7 @@ const WEIGHT_HELP: Record<keyof Weights, string> = {
 };
 
 export function BuildPage() {
-  const { task, setTask, buildContext, busy, apiStatus, config, benchmarkTasks, details, repo } = useStore();
+  const { task, setTask, buildContext, busy, apiStatus, config, benchmarkTasks, details, repo, budgetIssue, clearBudgetIssue } = useStore();
   const exampleTasks = repo?.repository.root_name === "sample_library_repo" ? LIBRARY_TASKS : benchmarkTasks;
   const [budget, setBudget] = useState(4000);
   const [mode, setMode] = useState<Mode>("acwm");
@@ -50,9 +51,9 @@ export function BuildPage() {
     }
   }, [config, weights]);
 
-  const submit = () =>
+  const submit = (tokenBudget: number = budget) =>
     buildContext({
-      task, mode, token_budget: budget, expansion_depth: depth, compression,
+      task, mode, token_budget: tokenBudget, expansion_depth: depth, compression,
       include_research: research, required_paths: required, ...(weights ? { weights } : {}),
     });
 
@@ -61,6 +62,16 @@ export function BuildPage() {
   return (
     <div>
       <PageHeader title="Build context" subtitle="Describe a coding task. ACWM selects the most useful files and excerpts that fit your token budget." />
+      {budgetIssue && (
+        <div className="mb-6">
+          <BudgetExceededPanel
+            issue={budgetIssue}
+            disabled={!!busy}
+            onDismiss={clearBudgetIssue}
+            onRetry={(b) => { setBudget(b); void submit(b); }}
+          />
+        </div>
+      )}
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-6 lg:col-span-2">
           <Card>

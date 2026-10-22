@@ -123,7 +123,12 @@ flowchart TB
 
    `usable = total - system reserve - task tokens - response reserve - safety margin`
 
-   A non-positive result is rejected with `BudgetExceededError`.
+   A non-positive result is rejected with `BudgetExceededError` (`reason:
+   "reservations"`). Its `details` come from
+   `token_counter.budget_exceeded_details`: the reserves, needed and available tokens,
+   the shortfall, and `suggested_budget`, the smallest total (rounded up to 500) whose
+   usable space covers the need, accounting for the safety margin growing with the
+   total.
 3. **Retrieval and ranking** (`retrieval/hybrid_ranker`): BM25 hits, filename and symbol
    matches, graph expansion, test, config and optional semantic signals are each
    normalised to [0, 1], then combined with configurable weights.
@@ -136,7 +141,8 @@ flowchart TB
 6. **Assembly and validation** (`context/context_builder.assemble_package`): the
    agent-facing code block is rendered and its tokens counted. If it exceeds the usable
    budget, the lowest-value non-required items are removed and recorded as omissions. If
-   required items alone exceed the budget, a `BudgetExceededError` is raised. The builder
+   required items alone exceed the budget, a `BudgetExceededError` is raised
+   (`reason: "required_files"`, same structured details). The builder
    also records dependencies among the selected files and known omissions (imports of
    selected files that were left out).
 7. **Export** (`context/context_exporter`) writes Markdown, JSON or plain text. JSON is
@@ -246,3 +252,31 @@ protections are defence in depth:
 * processing timeouts (the worker thread is not killed on timeout).
 
 They do not make it safe to expose ACWM to untrusted users on a network.
+
+## Conversation manager
+
+`app/conversation/manager.ConversationManager` keeps a growing chat inside
+`context.total_tokens` (from `config.yaml`).
+
+1. **Every turn:** `add()` records each message with its tokens and metadata (role, turn,
+   timestamp, pinned, required, score). No LLM call.
+2. **Trigger:** `prepare()` compacts when usage reaches `compact_threshold` and the
+   cooldown has passed (or, during a cooldown, runs a heuristic-only compaction if the
+   window would overflow).
+3. **Compaction:** older messages that are not recent, pinned or required are sent to the
+   manager LLM (`manager_llm.ManagerLLM`) with the current request. Its JSON reply is
+   validated against `models.ManagerOutput` (`summary`, `pinned_facts`, `message_scores`,
+   `superseded`, `required_for_task`); one error-correction retry, then
+   `heuristics.heuristic_output`. Facts are merged by `facts.merge_facts`.
+4. **Eviction:** if usage is above `compact_target`, `eviction_order()` removes old,
+   unpinned, not-required messages, lowest score first, then oldest.
+5. **Budget report:** `budget_report()` attaches a `BudgetReport` to every window:
+   `over_target` (compaction could not reach the target), `over_budget` (the window exceeds
+   the budget) or `ok`, with a per-part `breakdown` (system prompt, pinned facts, summary,
+   recent turns, pinned messages, required messages, older messages) and an explanation.
+6. **Metrics:** `record_turn()` stores a `TurnMetrics` row with main and manager tokens,
+   cost, manager latency, compaction mode and budget status.
+
+The benchmark (`evaluation/conversation_benchmark.py`) runs the same conversation through
+`FullContext`, `NaiveTruncation` and the manager, and is exposed at
+`POST /conversation/benchmark` and on the web app's Conversation page.

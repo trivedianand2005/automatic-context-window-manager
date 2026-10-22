@@ -19,7 +19,12 @@ from app.context.package_models import (
     RetrievalConfig,
 )
 from app.context.summarizer import llm_summary, python_outline
-from app.context.token_counter import get_token_counter, plan_budget
+from app.context.token_counter import (
+    MIN_USABLE_TOKENS,
+    budget_exceeded_details,
+    get_token_counter,
+    plan_budget,
+)
 from app.conversation.backends import backend_status
 from app.conversation.config import get_conversation_config
 from app.core.config import BENCHMARK_FILE, RankingWeights, Settings, get_settings
@@ -234,10 +239,11 @@ class ACWMService:
         primary, secondary = query_terms(analysis)
         plan = plan_budget(budget, opts.task, counter)
         if plan.usable_tokens <= 0:
+            details = budget_exceeded_details(plan, MIN_USABLE_TOKENS, "reservations")
             raise BudgetExceededError(
                 "Token budget is too small after reserving system, task, response and safety "
-                "margin tokens.",
-                details=plan.model_dump(),
+                f"margin tokens. Try at least {details['suggested_budget']:,} tokens.",
+                details={**plan.model_dump(), **details},
             )
         hits = repo.lexical.search(primary, secondary)
 

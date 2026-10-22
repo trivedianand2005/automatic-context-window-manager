@@ -117,3 +117,37 @@ def plan_budget(budget: BudgetSettings, task_text: str, counter: TokenCounter) -
         per_item_overhead_tokens=budget.per_item_overhead_tokens,
         usable_tokens=max(0, usable),
     )
+
+
+MIN_USABLE_TOKENS = 256  # smallest useful amount of repository context
+BUDGET_ROUNDING = 500
+
+
+def budget_exceeded_details(plan: BudgetPlan, needed_tokens: int, reason: str) -> dict:
+    """Structured budget-exceeded report: what is reserved, what is needed, what would fit.
+
+    ``reason`` is "reservations" (nothing left for context after reservations) or
+    "required_files" (the files the user marked as required do not fit). The suggested
+    budget accounts for the safety margin growing with the total, rounded up to 500.
+    """
+    ratio = plan.safety_margin_tokens / plan.total_tokens if plan.total_tokens else 0.0
+    fixed = plan.reserved_system_tokens + plan.reserved_task_tokens + plan.reserved_response_tokens
+    minimum = math.ceil((fixed + needed_tokens) / max(1e-9, 1 - ratio))
+    suggested = max(
+        math.ceil(minimum / BUDGET_ROUNDING) * BUDGET_ROUNDING,
+        plan.total_tokens + BUDGET_ROUNDING,
+    )
+    return {
+        "reason": reason,
+        "total_budget": plan.total_tokens,
+        "needed_tokens": needed_tokens,
+        "available_tokens": plan.usable_tokens,
+        "shortfall_tokens": max(0, needed_tokens - plan.usable_tokens),
+        "reservations": {
+            "system": plan.reserved_system_tokens,
+            "task": plan.reserved_task_tokens,
+            "response": plan.reserved_response_tokens,
+            "safety_margin": plan.safety_margin_tokens,
+        },
+        "suggested_budget": suggested,
+    }

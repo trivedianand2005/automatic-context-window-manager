@@ -15,7 +15,7 @@ from app.context.package_models import (
     RetrievalConfig,
     TokenStats,
 )
-from app.context.token_counter import BudgetPlan, TokenCounter
+from app.context.token_counter import BudgetPlan, TokenCounter, budget_exceeded_details
 from app.core.exceptions import BudgetExceededError
 from app.core.models import Candidate, RepoFile, TaskAnalysis
 from app.graph.dependency_graph import file_node
@@ -112,10 +112,16 @@ def assemble_package(
     while rendered > plan.usable_tokens:
         removable = [i for i in items if not i.required]
         if not removable:
+            details = budget_exceeded_details(plan, rendered, "required_files")
             raise BudgetExceededError(
-                f"Required context ({rendered} tokens) exceeds the usable budget "
-                f"({plan.usable_tokens} tokens). Increase the budget or remove required files.",
-                details={"rendered_tokens": rendered, "usable_tokens": plan.usable_tokens},
+                f"Required context ({rendered:,} tokens) exceeds the usable budget "
+                f"({plan.usable_tokens:,} tokens). Increase the budget to at least "
+                f"{details['suggested_budget']:,} tokens or remove required files.",
+                details={
+                    **details,
+                    "rendered_tokens": rendered,
+                    "usable_tokens": plan.usable_tokens,
+                },
             )
         victim = min(removable, key=lambda i: (i.combined_score / max(i.tokens, 1), i.path))
         items.remove(victim)

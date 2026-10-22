@@ -7,7 +7,9 @@ import {
 import { Badge, Card, Empty, Notice, PageHeader, Spinner, Stat } from "../components/ui";
 import { api, ApiError } from "../lib/api";
 import { fmtInt, fmtPct } from "../lib/format";
-import type { ConversationResults, ConversationStatus, ConversationStrategy, ConversationSummary } from "../lib/types";
+import type {
+  ConversationBudgetStatus, ConversationResults, ConversationStatus, ConversationStrategy, ConversationSummary,
+} from "../lib/types";
 
 /** Fixed strategy -> color mapping (never by rank). */
 export const STRATEGY_COLOR: Record<ConversationStrategy, string> = {
@@ -107,6 +109,13 @@ function RecallChart({ summary }: { summary: ConversationSummary[] }) {
       </ResponsiveContainer>
     </div>
   );
+}
+
+function BudgetBadge({ status }: { status: ConversationBudgetStatus }) {
+  if (status === "ok") return <Badge tone="high">ok</Badge>;
+  return status === "over_budget"
+    ? <span className="inline-flex items-center rounded-md bg-red-500/10 px-1.5 py-0.5 text-[11px] font-medium text-red-300 ring-1 ring-red-500/30 ring-inset">over budget</span>
+    : <Badge tone="medium">over target</Badge>;
 }
 
 function StatusCard({ status }: { status: ConversationStatus | null }) {
@@ -239,7 +248,7 @@ export function ConversationPage() {
               <div className="overflow-x-auto">
                 <table className="w-full text-sm tabular-nums">
                   <thead className="text-left text-xs text-zinc-500 uppercase">
-                    <tr><th className="py-2 pr-4">Strategy</th><th className="pr-4 text-right">Turns</th><th className="pr-4 text-right">Main tokens</th><th className="pr-4 text-right">Manager tokens</th><th className="pr-4 text-right">Manager latency</th><th className="pr-4 text-right">Cost</th><th className="text-right">Recall</th></tr>
+                    <tr><th className="py-2 pr-4">Strategy</th><th className="pr-4 text-right">Turns</th><th className="pr-4 text-right">Main tokens</th><th className="pr-4 text-right">Manager tokens</th><th className="pr-4 text-right">Manager latency</th><th className="pr-4 text-right">Cost</th><th className="pr-4 text-right">Budget exceeded</th><th className="text-right">Recall</th></tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800/70">
                     {summary.map((s) => (
@@ -250,6 +259,10 @@ export function ConversationPage() {
                         <td className="pr-4 text-right">{fmtInt(s.manager_input_tokens + s.manager_output_tokens)}</td>
                         <td className="pr-4 text-right">{s.manager_calls ? `${fmtInt(s.manager_latency_ms)} ms` : "—"}</td>
                         <td className="pr-4 text-right">{usd(s.total_cost_usd)}</td>
+                        <td className={`pr-4 text-right ${s.budget_exceeded_turns ? "text-red-300" : "text-zinc-400"}`}>
+                          {s.budget_exceeded_turns ? `${s.budget_exceeded_turns} turn${s.budget_exceeded_turns > 1 ? "s" : ""}` : "never"}
+                          {s.over_target_turns ? <span className="text-amber-300"> · {s.over_target_turns} over target</span> : null}
+                        </td>
                         <td className="text-right">{s.recall_correct}/{s.recall_total}</td>
                       </tr>
                     ))}
@@ -263,7 +276,7 @@ export function ConversationPage() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm tabular-nums">
                     <thead className="text-left text-xs text-zinc-500 uppercase">
-                      <tr><th className="py-2 pr-4">Turn</th><th className="pr-4">Mode</th><th className="pr-4 text-right">Context after</th><th className="pr-4 text-right">Usage</th><th className="pr-4 text-right">Manager in / out</th><th className="pr-4 text-right">Latency</th><th className="text-right">Manager cost</th></tr>
+                      <tr><th className="py-2 pr-4">Turn</th><th className="pr-4">Mode</th><th className="pr-4 text-right">Context after</th><th className="pr-4 text-right">Usage</th><th className="pr-4 text-right">Manager in / out</th><th className="pr-4 text-right">Latency</th><th className="pr-4 text-right">Manager cost</th><th className="text-right">Budget</th></tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-800/70">
                       {compactions.map((t) => (
@@ -274,7 +287,8 @@ export function ConversationPage() {
                           <td className="pr-4 text-right">{fmtPct(t.usage_ratio)}</td>
                           <td className="pr-4 text-right">{fmtInt(t.manager_input_tokens)} / {fmtInt(t.manager_output_tokens)}</td>
                           <td className="pr-4 text-right">{fmtInt(t.manager_latency_ms)} ms</td>
-                          <td className="text-right">{usd(t.manager_cost_usd)}</td>
+                          <td className="pr-4 text-right">{usd(t.manager_cost_usd)}</td>
+                          <td className="text-right"><BudgetBadge status={t.budget_status} /></td>
                         </tr>
                       ))}
                     </tbody>
@@ -283,6 +297,27 @@ export function ConversationPage() {
               ) : (
                 <p className="text-sm text-zinc-500">The context never reached the compaction threshold at this budget.</p>
               )}
+            </Card>
+
+            <Card title="Budget events">
+              {STRATEGIES.some((s) => results.budget_events[s]?.length) ? (
+                <ul className="space-y-2 text-sm">
+                  {STRATEGIES.flatMap((s) => (results.budget_events[s] ?? []).map((e) => (
+                    <li key={`${s}-${e.turn}`} className="flex flex-wrap items-start gap-2">
+                      <span className="w-36 shrink-0 text-zinc-300"><span className="mr-2 inline-block size-2.5 rounded-sm" style={{ background: STRATEGY_COLOR[s] }} />{STRATEGY_LABEL[s]}</span>
+                      <span className="w-16 shrink-0 tabular-nums text-zinc-500">turn {e.turn}</span>
+                      <BudgetBadge status={e.status} />
+                      <span className="min-w-0 flex-1 text-zinc-400">{e.message}</span>
+                    </li>
+                  )))}
+                </ul>
+              ) : (
+                <p className="text-sm text-zinc-500">No strategy exceeded the budget or missed the compaction target.</p>
+              )}
+              <p className="mt-3 text-xs text-zinc-500">
+                <b className="text-zinc-400">Over budget</b>: the context sent to the main model is larger than the budget.
+                {" "}<b className="text-zinc-400">Over target</b>: compaction could not get down to the target because protected content (system prompt, facts, summary, recent turns, pinned and required messages) is too large.
+              </p>
             </Card>
 
             <Card title="Recall questions">
