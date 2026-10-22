@@ -1,0 +1,57 @@
+# ACWM conversation manager configuration.
+#
+# Every model name, backend and tunable for the conversation manager lives here.
+# Secrets never go in this file: ANTHROPIC_API_KEY is read from the environment (or .env).
+# Point ACWM_CONFIG at another file to use a different configuration.
+
+# The model that answers the user. It never manages context.
+main_model:
+  backend: anthropic          # anthropic | ollama | mock
+  model: claude-opus-5-5
+  max_tokens: 1024
+  timeout_seconds: 60
+  effort: low                 # anthropic only: low | medium | high | xhigh | max
+  refusal_fallbacks: true     # anthropic only: server-side fallback on a refusal
+
+# The small, cheap model that ONLY manages context (summaries, scores, facts).
+manager:
+  backend: anthropic          # anthropic | ollama | mock | none (none = heuristics only)
+  model: claude-haiku-5-5
+  max_tokens: 2048
+  timeout_seconds: 20
+  effort: low
+  refusal_fallbacks: false    # Haiku has no server-side fallback
+  json_retries: 1             # retries with an error-correction prompt before heuristics
+
+# Used when a backend above is "ollama".
+ollama:
+  host: http://localhost:11434
+  manager_model: qwen2.5:7b
+  main_model: llama3.2
+  temperature: 0.1
+
+# Context window policy (all ratios are fractions of total_tokens).
+context:
+  total_tokens: 8000          # token budget for what is sent to the main model
+  compact_threshold: 0.75     # call the manager once usage reaches this
+  compact_target: 0.50        # after compaction, evict until usage is at or below this
+  keep_recent_turns: 4        # most recent turns always stay verbatim
+  cooldown_turns: 3           # minimum turns between two manager compactions
+  verbatim_min_score: 4       # old messages scored >= this (1-5) stay verbatim
+  max_summary_tokens: 600     # running summary is capped at this size
+  max_compaction_input_tokens: 6000  # largest batch of old messages sent per call
+  per_message_overhead_tokens: 4
+
+# USD per 1M tokens. Unknown models cost 0 (a warning is logged once).
+pricing:
+  claude-opus-5-5: {input: 4.00, output: 20.00}
+  claude-sonnet-5-5: {input: 2.00, output: 10.00}
+  claude-haiku-5-5: {input: 0.10, output: 0.50}
+  qwen2.5:7b: {input: 0.0, output: 0.0}
+  llama3.2: {input: 0.0, output: 0.0}
+  mock: {input: 0.0, output: 0.0}
+
+benchmark:
+  budget_tokens: 4000         # smaller than context.total_tokens so strategies diverge
+  judge: keyword              # keyword | llm (llm uses the manager model as judge)
+  output_dir: demo_output/conversation

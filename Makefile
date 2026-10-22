@@ -1,7 +1,7 @@
 # Convenience targets. On Windows without `make`, run the commands shown in README.md.
 PYTHON ?= python
 
-.PHONY: install install-optional lint format test ui api demo bench clean
+.PHONY: install install-optional lint format test ui api demo bench conv-bench clean
 
 install:
 	$(PYTHON) -m pip install -r requirements.txt
@@ -31,6 +31,9 @@ demo:
 
 bench:
 	$(PYTHON) scripts/evaluate_benchmarks.py
+
+conv-bench:
+	$(PYTHON) scripts/conversation_benchmark.py --dry-run
 
 clean:
 	rm -rf demo_output .pytest_cache .ruff_cache

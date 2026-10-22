@@ -4,5 +4,8 @@
 # and ANTHROPIC_API_KEY).
 anthropic>=1.0
 
+# Charts for the conversation-manager benchmark (scripts/conversation_benchmark.py).
+matplotlib>=3.8
+
 # Semantic retrieval signal (downloads an embedding model on first use; large install).
 # sentence-transformers>=2.7

@@ -37,12 +37,13 @@ was not tuned on.
 12. [Example task and context package](#example-task-and-context-package)
 13. [How it works](#how-it-works)
 14. [Benchmarks](#benchmarks)
-15. [TinyFish configuration](#tinyfish-configuration)
-16. [API endpoints](#api-endpoints)
-17. [Tests](#tests)
-18. [Known limitations](#known-limitations)
-19. [Security notes](#security-notes)
-20. [Future improvements](#future-improvements)
+15. [Conversation manager (hybrid LLM)](#conversation-manager-hybrid-llm)
+16. [TinyFish configuration](#tinyfish-configuration)
+17. [API endpoints](#api-endpoints)
+18. [Tests](#tests)
+19. [Known limitations](#known-limitations)
+20. [Security notes](#security-notes)
+21. [Future improvements](#future-improvements)
 
 ---
 
@@ -218,13 +219,18 @@ app/
   graph/                     dependency_graph.py, graph_expansion.py
   context/                   token_counter.py, budget_optimizer.py, summarizer.py,
                              context_builder.py, context_exporter.py, package_models.py
-  evaluation/                baseline.py, metrics.py, benchmark.py
+  evaluation/                baseline.py, metrics.py, benchmark.py,
+                             conversation_dataset.py, conversation_benchmark.py
+  conversation/              hybrid conversation manager: manager.py, manager_llm.py,
+                             backends.py, models.py, prompts.py, structured.py, facts.py,
+                             heuristics.py, pricing.py, config.py
   integrations/              llm_provider.py, tinyfish_client.py, mock_web_research.py
   storage/                   index_store.py, session_store.py
   utils/                     security.py, file_hashing.py
 benchmarks/sample_fastapi_tasks.json   labelled benchmark tasks
 examples/sample_fastapi_repo/          demo FastAPI service (package `shopapi`)
-scripts/run_demo.py, scripts/evaluate_benchmarks.py
+scripts/run_demo.py, scripts/evaluate_benchmarks.py, scripts/conversation_benchmark.py
+config.yaml                            conversation manager models, thresholds, prices
 tests/unit, tests/integration, tests/fixtures
 docs/architecture.md, api.md, evaluation.md, tinyfish_integration.md
 ```
@@ -274,6 +280,7 @@ Copy `.env.example` to `.env`. Every variable is optional.
 | `ACWM_LLM_PROVIDER` | `none` | Set `anthropic` to enable LLM analysis and summaries |
 | `ACWM_LLM_MODEL` | `claude-opus-5-5` | Model for the Anthropic provider |
 | `ANTHROPIC_API_KEY` | (empty) | Read by the Anthropic SDK; never logged |
+| `ACWM_CONFIG` | `config.yaml` | Conversation manager config file (models, thresholds, prices) |
 | `ACWM_TINYFISH_ENABLED` | `false` | Default for the research toggle |
 | `TINYFISH_API_KEY` | (empty) | Real TinyFish Search API; when empty, the mock is used |
 | `ACWM_TINYFISH_INCLUDE_DOMAINS` | FastAPI, Pydantic and Python docs | Domains to search |
@@ -493,6 +500,172 @@ on the sample repository. Full metrics and caveats are in
 * The benchmark is small and the heuristics were tuned on it, so treat these numbers as a
   demonstration, not a general claim.
 
+## Conversation manager (hybrid LLM)
+
+The repository pipeline above builds one context package per task. The conversation
+manager (`app/conversation/`) handles the other half of the problem: a long chat whose
+history keeps growing. It keeps the context under a token budget without forgetting
+facts from early in the conversation.
+
+### Architecture
+
+```mermaid
+flowchart LR
+    U[User message] --> CM[ConversationManager]
+    CM -->|every turn, no LLM| H[Token count + per-message metadata<br/>role, turn, tokens, pinned, score]
+    H --> T{usage >= 75%<br/>and cooldown over?}
+    T -- no --> W[Context window]
+    T -- yes --> ML[Manager LLM<br/>Haiku or Ollama]
+    ML -->|JSON: summary, pinned_facts,<br/>message_scores, superseded| V{Valid?}
+    V -- no --> R[Retry once with<br/>error-correction prompt]
+    R --> V2{Valid?}
+    V2 -- no --> HF[Heuristic fallback]
+    V -- yes --> AP[Apply: facts block + summary<br/>+ high-scoring messages]
+    V2 -- yes --> AP
+    HF --> AP
+    AP --> EV[Evict lowest score, oldest first,<br/>until usage <= 50%]
+    EV --> W
+    W --> MM[Main model<br/>Opus, answers the user]
+    MM --> M[(Per-turn metrics:<br/>tokens, cost, latency, compaction)]
+```
+
+Two models, kept separate:
+
+* **Main model** (`main_model` in `config.yaml`, default `claude-opus-5-5`) answers the
+  user. It never manages context.
+* **Manager model** (`manager`, default `claude-haiku-5-5`, or a local Ollama model) is used
+  only to summarize, score and extract facts. It never answers the user.
+
+### How the hybrid manager works
+
+1. **Every turn (cheap):** each message is stored with its role, turn index, timestamp,
+   token count (tiktoken), pinned flag and score. Usage = system block + messages.
+2. **Trigger:** when usage reaches `compact_threshold` (75% of `total_tokens`) and at least
+   `cooldown_turns` have passed since the last compaction, the manager LLM runs.
+3. **Compaction:** the system prompt, the last `keep_recent_turns` turns and pinned messages
+   stay verbatim. Older messages go to the manager, which returns JSON:
+
+   ```json
+   {
+     "summary": "running summary of the compacted messages",
+     "pinned_facts": ["deadline: public beta on November 14", "database: switched to SQLite"],
+     "message_scores": [{"id": "m12", "score": 4, "reason": "exact API contract"}],
+     "superseded": ["m9"]
+   }
+   ```
+
+   They are replaced by a **pinned-facts block** (never evicted), the **running summary**,
+   and any message scored `>= verbatim_min_score` that was not superseded. New facts are
+   merged with existing ones: duplicates are dropped and, for the same `topic:`, the newer
+   fact wins.
+4. **Target:** if usage is still above `compact_target` (50%), the lowest-scored old
+   messages are evicted, oldest first among equal scores.
+5. **Hysteresis:** the 75% to 50% gap leaves room for several turns before the next trigger,
+   and the cooldown stops back-to-back calls when recent turns alone keep usage high. If the
+   context would overflow during a cooldown, a heuristic-only compaction runs (no LLM).
+6. **Never crashes:** a timeout, API error, refusal or invalid JSON (after one retry with an
+   error-correction prompt) logs a warning and falls back to heuristics: extractive facts,
+   rule-based scores and an extractive summary.
+
+The output schema is the `ManagerOutput` pydantic model in
+[app/conversation/models.py](app/conversation/models.py). The Anthropic backend also sends
+it as a JSON-schema structured output, and the Ollama backend sends it as `format`. Every
+reply is still validated. The prompts live in
+[app/conversation/prompts.py](app/conversation/prompts.py).
+
+```python
+from app.context.token_counter import get_token_counter
+from app.conversation.config import load_conversation_config
+from app.conversation.manager import build_manager
+
+cfg = load_conversation_config()
+mgr = build_manager("You are a helpful assistant.", cfg, get_token_counter())
+mgr.add("user", "Our deadline is November 14.")
+window, report = mgr.prepare()  # compacts only when needed
+# send window.system + window.messages to the main model, then:
+mgr.record_turn(window, report, cfg.main_model.model, in_tokens, out_tokens)
+mgr.add("assistant", answer)
+```
+
+### Configuration (`config.yaml`)
+
+All model names, backends and parameters are in [config.yaml](config.yaml). Point
+`ACWM_CONFIG` at another file to switch configurations. `ANTHROPIC_API_KEY` stays in the
+environment or `.env`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `main_model.backend` / `.model` | `anthropic` / `claude-opus-5-5` | Answering model (`anthropic`, `ollama`, `mock`) |
+| `manager.backend` / `.model` | `anthropic` / `claude-haiku-5-5` | Manager model (`anthropic`, `ollama`, `mock`, `none`) |
+| `manager.timeout_seconds` | `20` | Manager request timeout before falling back |
+| `manager.json_retries` | `1` | Error-correction retries before heuristics |
+| `ollama.host` / `.manager_model` / `.main_model` | `http://localhost:11434` / `qwen2.5:7b` / `llama3.2` | Local models |
+| `context.total_tokens` | `8000` | Token budget for the main model's context |
+| `context.compact_threshold` | `0.75` | Usage that triggers the manager |
+| `context.compact_target` | `0.50` | Usage to reach after compaction |
+| `context.keep_recent_turns` | `4` | Turns always kept verbatim |
+| `context.cooldown_turns` | `3` | Minimum turns between manager calls |
+| `context.verbatim_min_score` | `4` | Old messages scored at least this stay verbatim |
+| `context.max_summary_tokens` | `600` | Cap on the running summary |
+| `pricing.<model>` | see file | USD per 1M input/output tokens, for cost metrics |
+| `benchmark.budget_tokens` / `.judge` | `4000` / `keyword` | Benchmark budget and grading |
+
+To run the manager locally with no API costs: `ollama pull qwen2.5:7b`, then set
+`manager.backend: ollama`.
+
+### Metrics
+
+`ConversationManager.record_turn` logs one line per turn and keeps a `TurnMetrics` row
+with: tokens sent to the main model, main-model input/output tokens, manager tokens,
+manager latency, estimated cost (prices from `config.yaml`), and whether compaction fired
+(`llm` or `heuristic`).
+
+### Running the benchmark
+
+```bash
+python scripts/conversation_benchmark.py --dry-run   # mock models, no API keys
+python scripts/conversation_benchmark.py             # live: Opus answers, Haiku manages
+python scripts/conversation_benchmark.py --budget 3000 --judge llm
+make conv-bench                                      # same as --dry-run
+```
+
+The benchmark runs one 80-turn synthetic conversation
+([app/evaluation/conversation_dataset.py](app/evaluation/conversation_dataset.py)) through
+three strategies: **no management** (stops when it overflows the budget), **naive
+truncation** (drops the oldest messages) and **ACWM**. Eleven facts are planted in turns
+1-21, one is superseded at turn 44, and 11 recall questions are asked in turns 68-80.
+Answers are graded by keyword match, or by an LLM judge with `--judge llm`.
+
+It writes `results.json`, `summary.csv`, `turns.csv`, `answers.csv`, `dataset.json` and
+three charts (`tokens_per_turn.png`, `cost_comparison.png`, `recall_accuracy.png`) to
+`demo_output/conversation/`.
+
+How to read the numbers:
+
+* Filler turns use scripted assistant replies, so every strategy sees the same text. The
+  main model is only called on question turns. Main-model tokens and cost for the other
+  turns are estimated from tiktoken counts and the configured prices.
+* In `--dry-run` the main model is a mock that echoes its context, and the manager is a
+  mock built on the same heuristics as the fallback. "Recall" then means *the fact was
+  still in the context sent to the model*, not answer quality. Use a live run for
+  answer accuracy.
+
+### Results
+
+Dry run, measured on 2026-10-22 (budget 4000 tokens, 80 turns, prices from `config.yaml`):
+
+| Strategy | Turns completed | Total tokens | Manager tokens | Est. cost | Facts retained |
+|---|---|---|---|---|---|
+| No management | 44 (overflow at turn 45) | 83,281 | 0 | $0.3784 | 0/11 |
+| Naive truncation | 80 | 228,223 | 0 | $0.9915 | 1/11 |
+| ACWM + manager | 80 | 173,683 | 15,380 | $0.7150 | 11/11 |
+
+<!-- Paste the live-run charts here:
+![Context size per turn](docs/images/tokens_per_turn.png)
+![Total cost](docs/images/cost_comparison.png)
+![Recall accuracy](docs/images/recall_accuracy.png)
+-->
+
 ## TinyFish configuration
 
 The adapter targets the documented **TinyFish Search API** (`GET
@@ -550,6 +723,9 @@ The suite covers:
 * Markdown, JSON (schema) and TXT export;
 * metrics, baseline comparison and benchmarks;
 * TinyFish (mocked HTTP), the LLM provider (mocked) and fallbacks;
+* the conversation manager with a mocked manager LLM: threshold trigger and cooldown,
+  JSON validation, retry and heuristic fallback, pinned-fact merging, eviction order,
+  backends (Ollama via mocked HTTP) and a dry-run benchmark;
 * every API endpoint, with valid and invalid requests;
 * the main Streamlit workflow.
 
